@@ -1,0 +1,38 @@
+---
+title: "Godot Demo Projects: Learn by example with real games"
+description: "Discover the official Godot Engine demo repository — 100+ open-source projects covering 2D, 3D, audio, networking, XR, and more."
+---
+
+The Godot Demo Projects repository is a curated collection of open-source demonstration projects maintained by the Godot Engine team. Every folder containing a `project.godot` file is a fully runnable Godot project that shows you how to use a specific engine feature, implement a common game pattern, or structure a complete mini-game. Whether you are writing your first GDScript or integrating OpenXR hand tracking, there is a demo that shows you exactly how it is done.
+
+<CardGroup cols={2}>
+  <Card title="2D demos" icon="gamepad" href="/2d/overview">
+    Platformers, physics simulations, tilemaps, navigation, shaders, and sprite animation.
+  </Card>
+  <Card title="3D demos" icon="cube" href="/3d/overview">
+    Rendering techniques, global illumination, particle systems, physics, and character controllers.
+  </Card>
+  <Card title="Systems & features" icon="gears" href="/systems/audio">
+    Audio buses, GUI controls, multiplayer networking, scene loading, and viewport composition.
+  </Card>
+  <Card title="Advanced topics" icon="wand-magic-sparkles" href="/advanced/xr-and-vr">
+    XR and VR with OpenXR, compute shaders, editor plugins, mobile targets, and C# scripting.
+  </Card>
+</CardGroup>
+
+## What the demos teach you
+
+Each demo is designed to illustrate one or more concrete ideas rather than act as a complete game template. Reading through a demo teaches you:
+
+- **GDScript idioms** — how to structure nodes, signals, and scripts the way the Godot team does it.
+- **Engine feature usage** — the correct way to configure physics layers, use `CharacterBody2D`/`CharacterBody3D`, set up `AnimationPlayer` trees, and more.
+- **Project organisation** — how a real `project.godot` file looks, how autoloads are wired up, and how scenes are split into reusable components.
+- **Common game patterns** — enemy AI, pickups, score tracking, scene transitions, save/load, and input handling across keyboard, mouse, and gamepad.
+
+The 2D platformer demo, for example, shows jump physics, slope handling, bullet spawning, enemy collision layers, split-screen multiplayer, and pixel-art rendering settings — all in a single self-contained project. The 3D Squash the Creeps demo is the finished product of the official "Your first 3D game" tutorial, giving you a reference point as you follow along with the docs.
+
+## License and contributions
+
+All demos in this repository are distributed under the **MIT license**, which means you can use, copy, modify, and redistribute them freely — including in commercial projects. See the `LICENSE.md` file at the root of the repository for the full text.
+
+If you want to contribute a new demo or improve an existing one, the full contribution guidelines are documented in the [Godot contributing docs](https://contributing.godotengine.org/en/latest/other/demos.html). The short version: keep demos focused on a single concept, follow existing code style, and make sure the project opens cleanly in the target Godot version.

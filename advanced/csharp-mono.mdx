@@ -1,0 +1,366 @@
+---
+title: "C# and Mono: Using C# scripts in Godot 4"
+description: "Explore seven official C# demos from a beginner 2D game to networked multiplayer, and learn how GDScript patterns map to Godot's .NET scripting API."
+---
+
+Godot 4 supports C# through the .NET runtime. Every GDScript feature has a C# equivalent, but the mapping is not always one-to-one: signals become typed `delegate`-based events, snake_case method names become PascalCase, and `[Export]` replaces the `export` keyword. The seven demos in the `mono/` folder translate canonical Godot patterns — player movement, scene management, mob spawning, networked game state — into idiomatic C#. They are the best reference for how to structure a real C# Godot project and how GDScript concepts map to the .NET API.
+
+<Warning>
+  All `mono/` demos require the **.NET build of Godot**. The standard build does not include the C# scripting module. Download the **.NET** variant from [godotengine.org/download](https://godotengine.org/download) and ensure the [.NET SDK](https://dotnet.microsoft.com/download) (version 6 or later) is installed on your machine.
+</Warning>
+
+## The seven C# demos
+
+<CardGroup cols={2}>
+  <Card title="dodge_the_creeps" icon="person-running" href="#dodge-the-creeps">
+    The finished product of Godot's official "Your first 2D game" tutorial, rewritten entirely in C#. The clearest entry point for learning the GDScript-to-C# mapping.
+  </Card>
+  <Card title="squash_the_creeps" icon="cube" href="#squash-the-creeps">
+    The finished product of the "Your first 3D game" tutorial in C#. Uses `CharacterBody3D`, physics collision detection, signals, and `AnimationPlayer` speed scaling.
+  </Card>
+  <Card title="pong" icon="table-tennis-paddle-ball" href="#pong">
+    Classic two-player Pong in C#. Covers `Area2D` collision, bouncing physics, and score tracking with clean, minimal code.
+  </Card>
+  <Card title="multiplayer_pong" icon="network-wired" href="#multiplayer-pong">
+    Networked Pong using `ENetMultiplayerPeer`. Demonstrates host/join lobby, `MultiplayerPeer` setup, and handling connection and disconnection callbacks from C#.
+  </Card>
+  <Card title="2.5d" icon="layer-group" href="#25d">
+    A 2.5D rendering technique mixing 3D geometry with 2D sprites. This project combines C# and GDScript — the only demo in the folder that does.
+  </Card>
+  <Card title="android_iap" icon="cart-shopping" href="#android-iap-csharp">
+    The Android in-app purchase demo ported to C#. Requires the same GodotGooglePlayBilling plugin as the GDScript version.
+  </Card>
+</CardGroup>
+
+<Note>
+  All C# demos use the **Compatibility** renderer, except the `2.5d` demo which also uses Compatibility. The `2.5d` demo includes some GDScript alongside the C# files.
+</Note>
+
+## Dodge the Creeps
+
+`dodge_the_creeps` is the canonical starting point. The `Player.cs` script (`Area2D` subclass) shows the foundational patterns for every C# Godot project: typed node retrieval with `GetNode<T>()`, `[Export]` properties, `[Signal]` delegates, and `EmitSignal`:
+
+```csharp
+using Godot;
+
+public partial class Player : Area2D
+{
+    [Signal]
+    public delegate void HitEventHandler();
+
+    [Export]
+    public int Speed { get; set; } = 400;
+
+    public Vector2 ScreenSize { get; set; }
+
+    public override void _Ready()
+    {
+        ScreenSize = GetViewportRect().Size;
+        Hide();
+    }
+
+    public override void _Process(double delta)
+    {
+        var velocity = Vector2.Zero;
+        if (Input.IsActionPressed("move_right")) velocity.X += 1;
+        if (Input.IsActionPressed("move_left"))  velocity.X -= 1;
+        if (Input.IsActionPressed("move_down"))  velocity.Y += 1;
+        if (Input.IsActionPressed("move_up"))    velocity.Y -= 1;
+
+        var animatedSprite = GetNode<AnimatedSprite2D>("AnimatedSprite2D");
+
+        if (velocity.Length() > 0)
+        {
+            velocity = velocity.Normalized() * Speed;
+            animatedSprite.Play();
+        }
+        else
+        {
+            animatedSprite.Stop();
+        }
+
+        Position += velocity * (float)delta;
+        Position = new Vector2(
+            Mathf.Clamp(Position.X, 0, ScreenSize.X),
+            Mathf.Clamp(Position.Y, 0, ScreenSize.Y));
+
+        if (velocity.X != 0)
+        {
+            animatedSprite.Animation = "right";
+            animatedSprite.FlipH = velocity.X < 0;
+        }
+        else if (velocity.Y != 0)
+        {
+            animatedSprite.Animation = "up";
+            animatedSprite.FlipV = velocity.Y > 0;
+        }
+    }
+
+    public void OnBodyEntered(PhysicsBody2D body)
+    {
+        Hide();
+        EmitSignal(SignalName.Hit);
+        GetNode<CollisionShape2D>("CollisionShape2D")
+            .SetDeferred(CollisionShape2D.PropertyName.Disabled, true);
+    }
+}
+```
+
+The `Main.cs` scene manager spawns mobs at random positions along a `Path2D` and wires up timers, demonstrating group calls and `PackedScene.Instantiate<T>()`:
+
+```csharp
+public void NewGame()
+{
+    GetTree().CallGroup("mobs", Node.MethodName.QueueFree);
+    _score = 0;
+    var player = GetNode<Player>("Player");
+    player.Start(GetNode<Marker2D>("StartPosition").Position);
+    GetNode<Timer>("StartTimer").Start();
+}
+
+private void OnMobTimerTimeout()
+{
+    Mob mob = MobScene.Instantiate<Mob>();
+    var mobSpawnLocation = GetNode<PathFollow2D>("MobPath/MobSpawnLocation");
+    mobSpawnLocation.ProgressRatio = GD.Randf();
+    float direction = mobSpawnLocation.Rotation + Mathf.Pi / 2;
+    mob.Position = mobSpawnLocation.Position;
+    direction += (float)GD.RandRange(-Mathf.Pi / 4, Mathf.Pi / 4);
+    mob.Rotation = direction;
+    var velocity = new Vector2((float)GD.RandRange(150.0, 250.0), 0);
+    mob.LinearVelocity = velocity.Rotated(direction);
+    AddChild(mob);
+}
+```
+
+## Squash the Creeps
+
+`squash_the_creeps` is the 3D counterpart. `Player.cs` extends `CharacterBody3D` and demonstrates `MoveAndSlide()`, jump physics, and C#-idiomatic collision handling using pattern matching instead of group membership:
+
+```csharp
+public partial class Player : CharacterBody3D
+{
+    [Signal] public delegate void HitEventHandler();
+
+    [Export] public int Speed           { get; set; } = 14;
+    [Export] public int FallAcceleration { get; set; } = 75;
+    [Export] public int JumpImpulse     { get; set; } = 20;
+    [Export] public int BounceImpulse   { get; set; } = 16;
+
+    private Vector3 _targetVelocity = Vector3.Zero;
+
+    public override void _PhysicsProcess(double delta)
+    {
+        Vector3 direction = Vector3.Zero;
+        if (Input.IsActionPressed("move_right"))   direction.X += 1.0f;
+        if (Input.IsActionPressed("move_left"))    direction.X -= 1.0f;
+        if (Input.IsActionPressed("move_back"))    direction.Z += 1.0f;
+        if (Input.IsActionPressed("move_forward")) direction.Z -= 1.0f;
+
+        if (direction != Vector3.Zero)
+        {
+            direction = direction.Normalized();
+            GetNode<Node3D>("Pivot").Basis = Basis.LookingAt(direction);
+            GetNode<AnimationPlayer>("AnimationPlayer").SpeedScale = 4;
+        }
+
+        _targetVelocity.X = direction.X * Speed;
+        _targetVelocity.Z = direction.Z * Speed;
+
+        if (!IsOnFloor())
+            _targetVelocity.Y -= FallAcceleration * (float)delta;
+
+        if (IsOnFloor() && Input.IsActionJustPressed("jump"))
+            _targetVelocity.Y = JumpImpulse;
+
+        for (int i = 0; i < GetSlideCollisionCount(); i++)
+        {
+            KinematicCollision3D collision = GetSlideCollision(i);
+            // Pattern matching instead of checking node groups.
+            if (collision.GetCollider() is Mob mob)
+            {
+                if (Vector3.Up.Dot(collision.GetNormal()) > 0.1f)
+                {
+                    mob.Squash();
+                    _targetVelocity.Y = BounceImpulse;
+                    break;
+                }
+            }
+        }
+
+        Velocity = _targetVelocity;
+        MoveAndSlide();
+    }
+}
+```
+
+`Mob.cs` shows the companion pattern — a `CharacterBody3D` that is initialised from the spawner and destroys itself with `QueueFree()`:
+
+```csharp
+public void Initialize(Vector3 startPosition, Vector3 playerPosition)
+{
+    LookAtFromPosition(startPosition, playerPosition, Vector3.Up);
+    RotateY((float)GD.RandRange(-Mathf.Pi / 4.0, Mathf.Pi / 4.0));
+    int randomSpeed = GD.RandRange(MinSpeed, MaxSpeed);
+    Velocity = Vector3.Forward * randomSpeed;
+    Velocity = Velocity.Rotated(Vector3.Up, Rotation.Y);
+    GetNode<AnimationPlayer>("AnimationPlayer").SpeedScale = randomSpeed / MinSpeed;
+}
+
+public void Squash()
+{
+    EmitSignal(SignalName.Squashed);
+    QueueFree();
+}
+```
+
+## Pong
+
+`pong` is the smallest complete game in the folder. `Ball.cs` accelerates slightly each frame using a simple velocity-based movement model:
+
+```csharp
+public partial class Ball : Area2D
+{
+    private const int DefaultSpeed = 100;
+    public Vector2 direction = Vector2.Left;
+    private double _speed = DefaultSpeed;
+
+    public override void _Process(double delta)
+    {
+        _speed += delta * 2;
+        Position += (float)(_speed * delta) * direction;
+    }
+
+    public void Reset()
+    {
+        direction = Vector2.Left;
+        Position = _initialPos;
+        _speed = DefaultSpeed;
+    }
+}
+```
+
+## Multiplayer Pong
+
+`multiplayer_pong` demonstrates `ENetMultiplayerPeer` network setup in C#. The lobby creates or joins a server and reacts to `MultiplayerPeer` signals through string-based `Connect()` calls (the typed signal API requires additional boilerplate with the older signal system):
+
+```csharp
+public override void _Ready()
+{
+    GetTree().GetMultiplayer().Connect("peer_connected",
+        new Callable(this, nameof(PlayerConnected)));
+    GetTree().GetMultiplayer().Connect("peer_disconnected",
+        new Callable(this, nameof(PlayerDisconnected)));
+    GetTree().GetMultiplayer().Connect("connected_to_server",
+        new Callable(this, nameof(ConnectedOk)));
+    GetTree().GetMultiplayer().Connect("connection_failed",
+        new Callable(this, nameof(ConnectedFail)));
+}
+
+private void OnHostPressed()
+{
+    _peer = new ENetMultiplayerPeer();
+    Error err = _peer.CreateServer(DefaultPort, MaxNumberOfPeers);
+    if (err != Error.Ok)
+    {
+        SetStatus("Can't host, address in use.", false);
+        return;
+    }
+    _peer.Host.Compress(ENetConnection.CompressionMode.RangeCoder);
+    GetTree().GetMultiplayer().MultiplayerPeer = _peer;
+    SetStatus("Waiting for player...", true);
+}
+
+private void OnJoinPressed()
+{
+    string ip = _address.Text;
+    if (!ip.IsValidIPAddress())
+    {
+        SetStatus("IP address is invalid", false);
+        return;
+    }
+    _peer = new ENetMultiplayerPeer();
+    _peer.CreateClient(ip, DefaultPort);
+    _peer.Host.Compress(ENetConnection.CompressionMode.RangeCoder);
+    GetTree().GetMultiplayer().MultiplayerPeer = _peer;
+    SetStatus("Connecting...", true);
+}
+```
+
+## GDScript vs C# comparison
+
+The following examples show the same player movement logic in both languages side by side.
+
+<Tabs>
+  <Tab title="GDScript">
+    ```gdscript
+    extends CharacterBody2D
+
+    @export var speed: int = 400
+    var screen_size: Vector2
+
+    func _ready() -> void:
+        screen_size = get_viewport_rect().size
+        hide()
+
+    func _process(delta: float) -> void:
+        var velocity := Vector2.ZERO
+        if Input.is_action_pressed("move_right"):
+            velocity.x += 1
+        if Input.is_action_pressed("move_left"):
+            velocity.x -= 1
+        if velocity.length() > 0:
+            velocity = velocity.normalized() * speed
+        position += velocity * delta
+        position = position.clamp(Vector2.ZERO, screen_size)
+    ```
+  </Tab>
+  <Tab title="C#">
+    ```csharp
+    using Godot;
+
+    public partial class Player : CharacterBody2D
+    {
+        [Export]
+        public int Speed { get; set; } = 400;
+        public Vector2 ScreenSize { get; set; }
+
+        public override void _Ready()
+        {
+            ScreenSize = GetViewportRect().Size;
+            Hide();
+        }
+
+        public override void _Process(double delta)
+        {
+            var velocity = Vector2.Zero;
+            if (Input.IsActionPressed("move_right")) velocity.X += 1;
+            if (Input.IsActionPressed("move_left"))  velocity.X -= 1;
+            if (velocity.Length() > 0)
+                velocity = velocity.Normalized() * Speed;
+            Position += velocity * (float)delta;
+            Position = new Vector2(
+                Mathf.Clamp(Position.X, 0, ScreenSize.X),
+                Mathf.Clamp(Position.Y, 0, ScreenSize.Y));
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Key differences to keep in mind:
+
+- Property names use **PascalCase** in C# (`Position`, `Speed`, `IsOnFloor()`).
+- `@export` becomes the `[Export]` attribute on a public property.
+- `signal hit` becomes `[Signal] public delegate void HitEventHandler()`, and `emit_signal("hit")` becomes `EmitSignal(SignalName.Hit)`.
+- `get_node("Player")` becomes `GetNode<Player>("Player")` — the generic type parameter provides compile-time safety.
+- `delta` is `double` in C# virtual methods (`_Process`, `_PhysicsProcess`); cast to `float` when multiplying with `Vector2`/`Vector3`.
+- Deferred property setting uses `SetDeferred(PropertyName.Disabled, true)` with the static `PropertyName` inner class rather than a plain string.
+
+## 2.5D
+
+The `2.5d` demo renders 3D geometry with 2D sprites placed in the scene to create a 2.5D art style. It is the only demo in the `mono/` folder that mixes C# and GDScript — the main scene logic is in C# while some helper scripts remain in GDScript. This hybrid approach is fully supported in Godot; C# and GDScript nodes can coexist in the same scene tree and call each other's methods.
+
+## Android IAP (C#)
+
+The `android_iap` demo in `mono/android_iap/` is functionally identical to the GDScript version in `mobile/android_iap/` but written in C#. The `GodotGooglePlayBilling` singleton is accessed through `Engine.GetSingleton()` and connected via `Connect()` with `Callable`. The setup requirements — Custom Build, the GodotGooglePlayBilling plugin, a real Android device — are the same as the GDScript version. See the [mobile demos page](/advanced/mobile) for the full setup instructions.

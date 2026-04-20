@@ -1,0 +1,299 @@
+---
+title: "2D Platformer Demos: Characters, Physics & Co-op"
+description: "Learn CharacterBody2D, RigidBody2D, scene instancing, and split-screen co-op through six hands-on 2D platformer and action demos for Godot 4."
+---
+
+The 2D platformer demos range from the beginner-friendly Dodge the Creeps tutorial to a feature-complete pixel-art side-scroller with split-screen co-op, double jumps, and a physics-driven gun. Together they cover the two main approaches to character movement in Godot — `CharacterBody2D` for direct kinematic control and `RigidBody2D` for fully simulated physics — along with supporting patterns like scene instancing and signal-driven game logic.
+
+## platformer — pixel-art side-scroller with split-screen co-op
+
+The `platformer` demo is a relatively complete game: the player walks, jumps with a double jump, fires bullets, collects coins, and navigates around enemy crawlers. It ships with both a single-player scene (`game_singleplayer.tscn`) and a split-screen two-player scene (`game_splitscreen.tscn`). The split-screen mode shares a single `World2D` between two `SubViewport` nodes so both cameras render the same physics world independently.
+
+**Key features:**
+- `CharacterBody2D` player with slope snapping and terminal velocity
+- Double jump that increases horizontal speed on the second jump
+- Input suffix pattern (`action_suffix`) to separate Player 1 and Player 2 bindings
+- Moving platforms, collectible coins, and a pause menu
+- 120 physics ticks per second and physics interpolation enabled in `project.godot`
+- Pixel-art rendering: nearest-neighbour filtering, integer scale mode
+
+**Physics layers defined in `project.godot`:**
+
+| Layer | Name |
+|-------|------|
+| 1 | player |
+| 2 | enemies |
+| 3 | coins |
+| 4 | platforms |
+| 5 | ground |
+
+### Player controller
+
+The player script (`player/player.gd`) extends `CharacterBody2D`. It reads gravity from `ProjectSettings` so it always matches whatever value the project configures:
+
+```gdscript
+class_name Player
+extends CharacterBody2D
+
+const WALK_SPEED = 300.0
+const ACCELERATION_SPEED = WALK_SPEED * 6.0
+const JUMP_VELOCITY = -725.0
+const TERMINAL_VELOCITY = 700
+
+@export var action_suffix: String = ""
+
+var gravity: int = ProjectSettings.get(&"physics/2d/default_gravity")
+@onready var platform_detector := $PlatformDetector as RayCast2D
+
+func _physics_process(delta: float) -> void:
+    if is_on_floor():
+        _double_jump_charged = true
+    if Input.is_action_just_pressed("jump" + action_suffix):
+        try_jump()
+    elif Input.is_action_just_released("jump" + action_suffix) and velocity.y < 0.0:
+        # Player released jump early — bleed off upward momentum.
+        velocity.y *= 0.6
+    velocity.y = minf(TERMINAL_VELOCITY, velocity.y + gravity * delta)
+
+    var direction := Input.get_axis("move_left" + action_suffix, "move_right" + action_suffix) * WALK_SPEED
+    velocity.x = move_toward(velocity.x, direction, ACCELERATION_SPEED * delta)
+
+    floor_stop_on_slope = not platform_detector.is_colliding()
+    move_and_slide()
+```
+
+The `action_suffix` export lets Player 2 use `"jump_p2"`, `"move_left_p2"`, etc., while Player 1 uses the base action names. The same `Player` scene is instanced twice.
+
+### Split-screen setup
+
+The split-screen scene shares a `World2D` between two viewports so physics runs once but each camera follows its own player:
+
+```gdscript
+extends Game
+
+func _ready() -> void:
+    var player_2 := %Player2 as Player
+    var viewport_1 := %Viewport1 as SubViewport
+    var viewport_2 := %Viewport2 as SubViewport
+    viewport_2.world_2d = viewport_1.world_2d
+    player_2.camera.custom_viewport = viewport_2
+    player_2.camera.make_current()
+```
+
+### Game-level input handling
+
+The top-level `Game` node (`game.gd`) handles fullscreen toggling and pause, delegating to a `PauseMenu` node:
+
+```gdscript
+class_name Game
+extends Node
+
+@onready var _pause_menu := $InterfaceLayer/PauseMenu as PauseMenu
+
+func _unhandled_input(input_event: InputEvent) -> void:
+    if input_event.is_action_pressed(&"toggle_fullscreen"):
+        var mode := DisplayServer.window_get_mode()
+        if mode == DisplayServer.WINDOW_MODE_FULLSCREEN or \
+                mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+            DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+        else:
+            DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+        get_tree().root.set_input_as_handled()
+
+    elif input_event.is_action_pressed(&"toggle_pause"):
+        var tree := get_tree()
+        tree.paused = not tree.paused
+        if tree.paused:
+            _pause_menu.open()
+        else:
+            _pause_menu.close()
+        get_tree().root.set_input_as_handled()
+```
+
+### How to open and run the platformer
+
+<Steps>
+  <Step title="Open the project">
+    In the Godot Project Manager, click **Import**, navigate to `2d/platformer/`, and select `project.godot`. Click **Import & Edit**.
+  </Step>
+  <Step title="Choose a scene">
+    The project opens with `game_singleplayer.tscn` as the main scene. To try split-screen co-op, open `game_splitscreen.tscn` from the FileSystem dock and set it as the main scene, or press **F6** to run it directly.
+  </Step>
+  <Step title="Run the project">
+    Press **F5** (or the Play button) to start. Use arrow keys or WASD to move, Space or W/Up to jump, and Z/Space/Left Mouse to shoot. Press **F** or **Alt+Enter** to toggle fullscreen, and **Escape** to pause.
+  </Step>
+  <Step title="Explore the level scene">
+    Most gameplay content lives in `level/level.tscn`. Open it from the FileSystem dock to inspect TileMap layouts, enemy placement, coin nodes, and moving platform paths. Every GDScript file in the project contains inline comments explaining each class.
+  </Step>
+</Steps>
+
+---
+
+## dodge_the_creeps — beginner tutorial game
+
+`dodge_the_creeps` is the finished version of Godot's official ["Your first 2D game"](https://docs.godotengine.org/en/latest/getting_started/first_2d_game/index.html) tutorial. The player — an `Area2D` node — moves in four directions to avoid enemy mobs that spawn from the screen edges. A timer tracks survival time and the score is displayed via a HUD.
+
+**What it demonstrates:**
+- `Area2D` for the player and mobs (no physics body needed for this style of game)
+- Emitting a custom `hit` signal when the collision shape detects a body
+- Deferred `set_deferred()` to safely disable a collision shape inside a physics callback
+- `AnimatedSprite2D` direction switching and animation control
+
+```gdscript
+extends Area2D
+
+signal hit
+
+@export var speed = 400
+var screen_size
+
+func _ready():
+    screen_size = get_viewport_rect().size
+    hide()
+
+func _process(delta):
+    var velocity = Vector2.ZERO
+    if Input.is_action_pressed(&"move_right"):
+        velocity.x += 1
+    if Input.is_action_pressed(&"move_left"):
+        velocity.x -= 1
+    if Input.is_action_pressed(&"move_down"):
+        velocity.y += 1
+    if Input.is_action_pressed(&"move_up"):
+        velocity.y -= 1
+
+    if velocity.length() > 0:
+        velocity = velocity.normalized() * speed
+        $AnimatedSprite2D.play()
+    else:
+        $AnimatedSprite2D.stop()
+
+    position += velocity * delta
+    position = position.clamp(Vector2.ZERO, screen_size)
+
+func _on_body_entered(_body):
+    hide()
+    hit.emit()
+    # Deferred: cannot change physics properties inside a physics callback.
+    $CollisionShape2D.set_deferred(&"disabled", true)
+```
+
+<Note>
+  A C# version of Dodge the Creeps is available in the `mono/dodge_the_creeps/` directory of the repository.
+</Note>
+
+---
+
+## physics_platformer — RigidBody2D character
+
+The `physics_platformer` demo builds the same style of side-scroller but uses `RigidBody2D` for both the player and enemies instead of `CharacterBody2D`. This gives the character full physics interaction: it can ride a see-saw, push enemies, and be pushed back. The trade-off is that all movement logic must run inside `_integrate_forces()` rather than `_physics_process()`.
+
+**Renderer: Forward+** (required for this demo).
+
+```gdscript
+class_name Player
+extends RigidBody2D
+
+const WALK_ACCEL = 1000.0
+const WALK_MAX_VELOCITY = 200.0
+const JUMP_VELOCITY = 380.0
+
+func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
+    var velocity := state.get_linear_velocity()
+    var step := state.get_step()
+
+    var move_left := Input.is_action_pressed(&"move_left")
+    var move_right := Input.is_action_pressed(&"move_right")
+    var jump := Input.is_action_pressed(&"jump")
+
+    # Find contacts with an upward-facing normal to detect the floor.
+    var found_floor := false
+    for contact_index in state.get_contact_count():
+        var normal := state.get_contact_local_normal(contact_index)
+        if normal.dot(Vector2(0, -1)) > 0.6:
+            found_floor = true
+
+    if found_floor and jump:
+        velocity.y = -JUMP_VELOCITY
+
+    if found_floor:
+        if move_left and not move_right:
+            velocity.x = maxf(velocity.x - WALK_ACCEL * step, -WALK_MAX_VELOCITY)
+        elif move_right and not move_left:
+            velocity.x = minf(velocity.x + WALK_ACCEL * step, WALK_MAX_VELOCITY)
+
+    velocity += state.get_total_gravity() * step
+    state.set_linear_velocity(velocity)
+```
+
+The bullet is also a `RigidBody2D`, given an initial `linear_velocity` when fired, and a collision exception is added between the player and its own bullet with `add_collision_exception_with()`.
+
+---
+
+## kinematic_character — CharacterBody2D fundamentals
+
+`kinematic_character` is a focused demo of `CharacterBody2D` movement without the extra features of the full platformer. It covers horizontal acceleration, friction, gravity accumulation, and one-way collision platforms.
+
+```gdscript
+extends CharacterBody2D
+
+const WALK_FORCE = 600
+const WALK_MAX_SPEED = 200
+const STOP_FORCE = 1300
+const JUMP_SPEED = 200
+
+@onready var gravity := float(ProjectSettings.get_setting("physics/2d/default_gravity"))
+
+func _physics_process(delta: float) -> void:
+    var walk := WALK_FORCE * (Input.get_axis(&"move_left", &"move_right"))
+    if abs(walk) < WALK_FORCE * 0.2:
+        velocity.x = move_toward(velocity.x, 0, STOP_FORCE * delta)
+    else:
+        velocity.x += walk * delta
+    velocity.x = clamp(velocity.x, -WALK_MAX_SPEED, WALK_MAX_SPEED)
+
+    velocity.y += gravity * delta
+    move_and_slide()
+
+    if is_on_floor() and Input.is_action_just_pressed(&"jump"):
+        velocity.y = -JUMP_SPEED
+```
+
+---
+
+## instancing — spawning scenes at runtime
+
+`instancing` demonstrates `PackedScene.instantiate()` — the core pattern for creating many copies of the same object. Clicking anywhere in the viewport spawns a new physics ball at the mouse position:
+
+```gdscript
+extends Node2D
+
+@export var ball_scene: PackedScene = preload("res://ball.tscn")
+
+func _unhandled_input(input_event: InputEvent) -> void:
+    if input_event is InputEventMouseButton and input_event.is_pressed():
+        if input_event.button_index == MOUSE_BUTTON_LEFT:
+            spawn(get_global_mouse_position())
+
+func spawn(spawn_global_position: Vector2) -> void:
+    var instance: Node2D = ball_scene.instantiate()
+    instance.global_position = spawn_global_position
+    add_child(instance)
+```
+
+The `@export var ball_scene` pattern lets you swap the spawned scene from the Inspector without touching code.
+
+---
+
+## pong — signals and Area2D game logic
+
+`pong` recreates the classic two-paddle game and shows how to structure a small game entirely around Godot signals. The ball, walls, and paddles are all `Area2D` nodes. When the ball overlaps a wall or paddle, that node emits a signal to the main scene, which adjusts the ball's velocity.
+
+**What it demonstrates:**
+- `Area2D` overlap signals for collision response without physics bodies
+- Signal-driven architecture: no polling, only reactions
+- Clean separation between game objects and game rules
+
+<Note>
+  A C# version of Pong is available in the `mono/pong/` directory of the repository.
+</Note>

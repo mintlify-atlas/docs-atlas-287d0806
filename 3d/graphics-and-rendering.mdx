@@ -1,0 +1,242 @@
+---
+title: "3D Graphics and Rendering Demos in Godot"
+description: "Fourteen demos showcasing Godot's 3D renderer: global illumination, volumetric fog, GPU particles, PBR materials, sky shaders, and more."
+---
+
+Godot's Forward+ renderer exposes a broad set of real-time and baked rendering techniques. The demos in this category each isolate one rendering system and let you interact with its parameters at runtime, so you can directly observe what each setting does without building a project from scratch. Several demos include keyboard-driven toggles that cycle through quality modes, making them useful as quick reference benchmarks when profiling your own scenes.
+
+## global_illumination
+
+`global_illumination` (`3d/global_illumination/`) is the most comprehensive rendering demo in the collection. It lets you cycle through every global illumination strategy Godot supports and combine them with reflection probes and screen-space effects.
+
+### GI modes compared
+
+<Tabs>
+  <Tab title="Environment Lighting">
+    No GI node is active. The scene is lit by the directional sun and environment sky energy only. This is the fastest option and works on all renderers including Compatibility.
+
+    ```gdscript
+    # test.gd
+    GIMode.NONE:
+        environment.ambient_light_sky_contribution = 0.5
+        $LightmapGIIndirect.visible = false
+        $LightmapGIAll.visible = false
+        $VoxelGI.visible = false
+        environment.sdfgi_enabled = false
+        sun.light_bake_mode = Light3D.BAKE_DYNAMIC
+    ```
+  </Tab>
+  <Tab title="LightmapGI">
+    Two lightmap bakes are included: one that bakes all light (direct + indirect), and one that bakes indirect only and lets direct light remain dynamic. Baked lightmaps have near-zero runtime cost but do not update when lights or geometry move.
+
+    ```gdscript
+    GIMode.LIGHTMAP_GI_ALL:
+        $LightmapGIAll.light_data = lightmap_gi_all_data
+        $LightmapGIAll.visible = true
+        $VoxelGI.visible = false
+        environment.sdfgi_enabled = false
+        # Lights set to BAKE_STATIC so they don't double-light baked surfaces.
+        sun.light_bake_mode = Light3D.BAKE_STATIC
+    ```
+  </Tab>
+  <Tab title="VoxelGI">
+    A `VoxelGI` node bakes lighting into a voxel grid at editor time. Dynamic objects outside the probe volume use environment lighting. VoxelGI supports real-time light changes within the baked volume and works in Forward+ only.
+
+    ```gdscript
+    GIMode.VOXEL_GI:
+        $VoxelGI.visible = true
+        environment.sdfgi_enabled = false
+        environment.ambient_light_sky_contribution = 1.0
+        # Lights must use BAKE_DYNAMIC for VoxelGI to contribute.
+        sun.light_bake_mode = Light3D.BAKE_DYNAMIC
+    ```
+  </Tab>
+  <Tab title="SDFGI">
+    Signed Distance Field Global Illumination computes indirect lighting at runtime by tracing the scene's SDF. It handles large open worlds and moving light sources but is the most GPU-intensive option. Forward+ renderer only.
+
+    ```gdscript
+    GIMode.SDFGI:
+        $VoxelGI.visible = false
+        environment.sdfgi_enabled = true
+        environment.ambient_light_sky_contribution = 1.0
+        sun.light_bake_mode = Light3D.BAKE_DYNAMIC
+    ```
+  </Tab>
+</Tabs>
+
+### Screen-space effects
+
+The demo also cycles through SSAO and SSIL independently:
+
+```gdscript
+# test.gd — SSAO + SSIL toggle
+SSILMode.SSAO_AND_SSIL:
+    environment.ssao_enabled = true
+    environment.ssil_enabled = true
+```
+
+SSAO and SSIL are only available in **Forward+**. On Compatibility, the label displays "Not supported on Compatibility" and the toggle has no effect.
+
+<Note>
+The GI mode enum uses the label text array `gi_mode_texts` to generate readable on-screen labels. Performance cost is shown inline: `"Environment Lighting (Fastest)"`, `"SDFGI (Slow)"`, etc. This pattern is useful in your own quality-settings UI.
+</Note>
+
+---
+
+## volumetric_fog
+
+`volumetric_fog` (`3d/volumetric_fog/`) configures a `FogVolume` node paired with a `FogMaterial` inside a dark, enclosed scene. The `Environment` resource on the `WorldEnvironment` node enables volumetric fog globally — `FogVolume` nodes then sculpt local density variation within that global fog field.
+
+Key `Environment` properties used:
+
+- `environment.volumetric_fog_enabled = true`
+- `environment.volumetric_fog_density` — global density across the whole scene
+- `environment.volumetric_fog_albedo` — fog color
+- `environment.volumetric_fog_emission` — self-illumination for glowing fog effects
+
+<Tip>
+Volumetric fog requires **Forward+**. On Mobile or Compatibility, fall back to `Environment.fog_enabled` (screen-space depth fog) for a cheaper approximation.
+</Tip>
+
+---
+
+## particles
+
+`particles` (`3d/particles/`) demonstrates `GPUParticles3D` with sub-emitters, collision shapes, and various material setups. The scene file `test.tscn` contains a `GPUParticlesCollisionSDF3D` node whose baked data is stored in `test.GPUParticlesCollisionSDF3D_data.exr` — this is computed in the editor once and loaded at runtime.
+
+Key concepts shown:
+
+- Sub-emitters: a parent `GPUParticles3D` spawns child particles on contact using the `EMIT_FLAG_CUSTOM_DATA` mechanism.
+- `GPUParticlesCollisionSDF3D`: particles deflect off static scene geometry baked into a signed distance field.
+- `GPUParticlesAttractor3D`: a sphere attractor pulls particles toward a point.
+
+---
+
+## lights_and_shadows
+
+`lights_and_shadows` (`3d/lights_and_shadows/`) places all three Godot light types — `DirectionalLight3D`, `OmniLight3D`, and `SpotLight3D` — in a single scene with configurable shadow maps. A `day_night_cycle.gd` script rotates the sun around the scene to show how shadow angles and light color temperature interact.
+
+<Tabs>
+  <Tab title="DirectionalLight3D">
+    Simulates a distant light source (sun or moon). Uses **cascaded shadow maps** (`directional_shadow_split_1`, `directional_shadow_split_2`, etc.) to maintain shadow resolution close to the camera while covering large distances.
+  </Tab>
+  <Tab title="OmniLight3D">
+    Point light that emits in all directions. Shadow is rendered as a **dual-paraboloid** map. Best for local lights such as torches or lamps.
+  </Tab>
+  <Tab title="SpotLight3D">
+    Cone-shaped light with a configurable `spot_angle` and `spot_attenuation`. Uses a single shadow map projection. The demo includes a projector texture (`logo_projector.png`) applied via `light_projector`.
+  </Tab>
+</Tabs>
+
+---
+
+## material_testers
+
+`material_testers` (`3d/material_testers/`) provides a `StandardMaterial3D` parameter explorer. Several mesh objects (sphere, cube, cylinder, capsule) are rendered side by side, each displaying a different PBR material configuration. The `tester.gd` script cycles through background HDRIs and switches between material presets at runtime.
+
+Parameters you can explore:
+
+| Parameter | Effect |
+|-----------|--------|
+| `roughness` | Surface microfacet scatter — 0 is mirror, 1 is fully diffuse |
+| `metallic` | Metallic workflow — affects Fresnel and specular color |
+| `emission` | Additive self-illumination, independent of scene lighting |
+| `normal_scale` | Strength of the normal map surface perturbation |
+| `clearcoat` | Secondary specular layer for car paint or lacquered wood |
+| `anisotropy` | Directional highlight stretch for brushed metal or hair |
+
+---
+
+## procedural_materials
+
+`procedural_materials` (`3d/procedural_materials/`) uses `ShaderMaterial` with custom GLSL-style GDShader code to generate textures entirely on the GPU. No external image assets are used. The `shaders/` directory contains individual `.gdshader` files for effects such as noise patterns, gradients, and tile-based surfaces.
+
+This approach is useful when:
+
+- Texture memory is constrained (mobile, web).
+- You need seamlessly tileable or infinitely scalable patterns.
+- Textures need to animate over time using shader uniforms.
+
+---
+
+## tonemap_color_correction
+
+`tonemap_color_correction` (`3d/tonemap_color_correction/`) demonstrates every `Environment` tonemapping mode Godot provides and shows how to apply Look-Up Table (LUT) color grading.
+
+<Tabs>
+  <Tab title="Tonemapping modes">
+    Cycle through these operators in the `Environment` resource:
+
+    | Operator | Characteristic |
+    |----------|---------------|
+    | Linear | No compression — high-brightness areas clip |
+    | Reinhard | Smooth rolloff, slight color desaturation at high exposure |
+    | Filmic | S-curve with shoulder and toe, similar to film stock |
+    | ACES | Academy Color Encoding System — high contrast, slightly warm |
+
+    The demo renders the same scene under each operator so differences are immediately visible.
+  </Tab>
+  <Tab title="LUT color grading">
+    A neutral 256×16 LUT (`neutral_luts/`) is applied through `Environment.adjustment_color_correction`. The `example_luts/` directory includes warm, cool, and desaturated looks. Swap `Environment.adjustment_color_correction` at runtime to change color grade without altering any lights or materials.
+  </Tab>
+</Tabs>
+
+---
+
+## sky_shaders
+
+`sky_shaders` (`3d/sky_shaders/`) implements a custom `Sky` shader that produces volumetric cloud layers using Perlin-Worley noise. The shader reads from `perlworlnoise.png` and `worlnoise.webp` textures that provide noise patterns in a single texture channel, saving memory.
+
+The sky shader file (`sky_volumetric_clouds.gdshader`) is assigned to a `ShaderMaterial` on a `Sky` resource inside the `Environment`. The `spheres.gd` script rotates a set of reflective spheres to show the sky reflected in them from different angles.
+
+<Note>
+Custom sky shaders replace Godot's built-in sky model entirely. To preserve sun disk rendering, either implement it in your shader or combine a sky shader with a `DirectionalLight3D` using `SKY_MODE_LIGHT_ONLY`.
+</Note>
+
+---
+
+## antialiasing
+
+`antialiasing` (`3d/antialiasing/`) renders the same scene with MSAA, FXAA, and TAA enabled in separate viewports or sequential toggles so you can directly compare aliasing artifacts, performance cost, and motion blur under each technique.
+
+<Tabs>
+  <Tab title="MSAA">
+    Multi-sample anti-aliasing. Supersamples only geometry edges; shader and texture aliasing is not addressed. Available at 2×, 4×, and 8× on Forward+ and Mobile. Zero temporal artifact.
+  </Tab>
+  <Tab title="FXAA">
+    Fast Approximate Anti-Aliasing. Single-pass post-process that softens all high-contrast edges. Very cheap but blurs fine detail. Available on all renderers.
+  </Tab>
+  <Tab title="TAA">
+    Temporal Anti-Aliasing. Accumulates sub-pixel samples across frames for high quality. Can introduce ghosting on fast-moving objects. Forward+ only.
+  </Tab>
+</Tabs>
+
+---
+
+## decals
+
+`decals` (`3d/decals/`) shows how `Decal` nodes project textures onto underlying geometry without modifying meshes. Decals are useful for bullet holes, paint splatters, wet surface patches, and damage marks. The demo places decals on curved and non-planar surfaces to illustrate projection limits and the `upper_fade`/`lower_fade` blend properties.
+
+---
+
+## occlusion_culling_mesh_lod
+
+`occlusion_culling_mesh_lod` (`3d/occlusion_culling_mesh_lod/`) populates a scene with many objects and enables both automatic mesh LOD (`GeometryInstance3D.lod_bias`) and `OccluderInstance3D` occlusion culling. The editor's **Debug → Visible Objects** counter shows the culling saving in real time.
+
+---
+
+## variable_rate_shading
+
+`variable_rate_shading` (`3d/variable_rate_shading/`) demonstrates Variable Rate Shading, which reduces fragment shader invocations in low-detail screen regions. A VRS image texture marks tiles at 1×1, 1×2, 2×1, or 2×2 shading rate; Godot samples the texture each frame to decide where to shade at reduced resolution. This technique requires Forward+ and supported GPU hardware.
+
+---
+
+## visibility_ranges
+
+`visibility_ranges` (`3d/visibility_ranges/`) sets `GeometryInstance3D.visibility_range_begin` and `visibility_range_end` on multiple mesh levels to implement discrete LOD switching based on camera distance. The demo visualizes the transition distances as colored rings around each object.
+
+---
+
+## voxel
+
+`voxel` (`3d/voxel/`) renders a small voxel world by generating `ArrayMesh` geometry from a 3D grid of block values entirely in GDScript. It demonstrates how to build a mesh from raw vertex and index arrays at runtime — a technique applicable to terrain generation, destructible environments, and procedural geometry.

@@ -1,0 +1,86 @@
+---
+title: "2D Demos: The Complete Godot 2D Demo Collection"
+description: "Explore all 27 official Godot 2D demos covering physics, platformers, shaders, navigation, lighting, and procedural drawing — all written in GDScript."
+---
+
+The Godot 2D demo collection contains 27 standalone projects that each highlight a specific engine feature or game-development pattern. Every demo is written in GDScript, and most run on the **Compatibility** renderer so they work on the widest range of hardware. Two exceptions use the **Forward+** renderer (Glow and Physics Platformer), and two use the **Mobile** renderer (2D Particles and Physics Tests). Because the demos have no shared theme beyond being 2D, you can open any project independently and study exactly the technique you need.
+
+<CardGroup cols={2}>
+  <Card title="Platformer Demos" href="/2d/platformer">
+    Character controllers, split-screen co-op, scene instancing, RigidBody2D physics, and the beginner Dodge the Creeps tutorial game.
+  </Card>
+  <Card title="Physics & Navigation" href="/2d/physics">
+    Physics test suites, finite state machines, NavigationAgent2D pathfinding, AStarGrid2D, chunked navigation meshes, and hexagonal tile maps.
+  </Card>
+  <Card title="Shaders & Visual Effects" href="/2d/shaders-and-effects">
+    Sprite shaders, full-screen post-process effects, WorldEnvironment glow, GPUParticles2D, Light2D shadows, light-as-mask, Tween animation, and custom CanvasItem drawing.
+  </Card>
+</CardGroup>
+
+## All 27 demos at a glance
+
+### Physics & gameplay
+
+| Demo | Key node / technique | Renderer |
+|------|----------------------|----------|
+| `platformer` | `CharacterBody2D`, split-screen co-op, slopes | Compatibility |
+| `physics_platformer` | `RigidBody2D` player, `_integrate_forces()` | Forward+ |
+| `kinematic_character` | `CharacterBody2D`, one-way platforms | Compatibility |
+| `dodge_the_creeps` | Beginner tutorial, `Area2D` hit detection | Compatibility |
+| `pong` | `Area2D` signals, classic game structure | Compatibility |
+| `instancing` | `PackedScene.instantiate()`, ball spawner | Compatibility |
+| `physics_tests` | Collision shapes, physics layers, regression tests | Mobile |
+| `finite_state_machine` | Hierarchical FSM, pushdown automaton | Compatibility |
+| `hexagonal_map` | Hexagonal `TileMap`, `CharacterBody2D` with hex motion | Compatibility |
+| `dynamic_tilemap_layers` | Runtime tile layer management | Compatibility |
+| `isometric` | Isometric tile rendering | Compatibility |
+| `role_playing_game` | RPG-style character movement | Compatibility |
+| `skeleton` | 2D skeletal animation | Compatibility |
+
+### Navigation
+
+| Demo | Key node / technique | Renderer |
+|------|----------------------|----------|
+| `navigation` | `NavigationRegion2D`, `NavigationAgent2D` | Compatibility |
+| `navigation_astar` | `AStarGrid2D`, steering behaviors | Compatibility |
+| `navigation_mesh_chunks` | Chunked nav mesh baking for large worlds | Compatibility |
+
+### Shaders & visual effects
+
+| Demo | Key node / technique | Renderer |
+|------|----------------------|----------|
+| `sprite_shaders` | `canvas_item` shaders: outline, blur, glow, shadow | Compatibility |
+| `screen_space_shaders` | Full-screen post-process: whirl, sepia, vignette | Compatibility |
+| `glow` | `WorldEnvironment` glow map, `Forward+` bloom | Forward+ |
+| `particles` | `GPUParticles2D`, `ParticleProcessMaterial` | Mobile |
+| `lights_and_shadows` | `Light2D`, `LightOccluder2D`, shadow quality | Compatibility |
+| `light2d_as_mask` | `Light2D` blend mode masking | Compatibility |
+| `tween` | `Tween` chaining, parallel steps, method tweening | Compatibility |
+| `custom_drawing` | `CanvasItem._draw()`, lines, polygons, meshes | Mobile |
+
+### Miscellaneous
+
+| Demo | Key node / technique | Renderer |
+|------|----------------------|----------|
+| `bullet_shower` | High-count projectile spawning | Compatibility |
+| `polygons_lines` | `Polygon2D`, `Line2D` nodes | Compatibility |
+
+<Note>
+  The `physics_platformer` and `glow` demos require the **Forward+** renderer. If you open them in a project configured for Compatibility, Godot will warn you before switching renderers.
+</Note>
+
+## Language and renderer notes
+
+All demos use **GDScript**. Two also include **.gdshader** files written in Godot's shader language (`sprite_shaders` and `screen_space_shaders`). C# ports of `dodge_the_creeps` and `pong` are available separately in the `mono/` directory of the repository.
+
+The table below summarises renderer requirements:
+
+| Renderer | Demos |
+|----------|-------|
+| Compatibility | 22 demos (the majority) |
+| Mobile | `particles`, `physics_tests`, `custom_drawing` |
+| Forward+ | `glow`, `physics_platformer` |
+
+<Tip>
+  If you are new to Godot, start with `dodge_the_creeps` — it is the finished version of the official "Your first 2D game" tutorial and introduces core concepts like signals, `Area2D`, and `AnimatedSprite2D` in a short, self-contained project.
+</Tip>

@@ -1,0 +1,306 @@
+---
+title: "3D Character and Physics Demos in Godot"
+description: "Explore eight demos covering CharacterBody3D movement, RigidBody3D vehicles, ragdoll simulation, soft-body cloth, and physics interpolation."
+---
+
+Godot's physics engine exposes several character and simulation archetypes. These demos each focus on a distinct approach: kinematic characters that move under explicit script control, rigid-body vehicles driven by wheel forces and joints, ragdolls whose bones are handed over to the physics simulation on demand, and soft-body meshes that deform under forces. Working through them in order gives you a clear view of when to reach for each node type.
+
+## squash_the_creeps
+
+`squash_the_creeps` is the companion project for the official [Your First 3D Game](https://docs.godotengine.org/en/stable/getting_started/first_3d_game/) tutorial. It introduces `CharacterBody3D`, `move_and_slide()`, and collision group detection in a minimal but complete game loop.
+
+### How the player works
+
+The player is a `CharacterBody3D`. Each physics frame, `_physics_process` reads directional input, orients the character toward its movement direction using `Basis.looking_at()`, applies manual gravity to `velocity.y`, and then calls `move_and_slide()`.
+
+```gdscript
+# Player.gd
+extends CharacterBody3D
+
+signal hit
+
+@export var speed = 14
+@export var jump_impulse = 20
+@export var bounce_impulse = 16
+@export var fall_acceleration = 75
+
+
+func _physics_process(delta):
+	var direction = Vector3.ZERO
+	if Input.is_action_pressed(&"move_right"):
+		direction.x += 1
+	if Input.is_action_pressed(&"move_left"):
+		direction.x -= 1
+	if Input.is_action_pressed(&"move_back"):
+		direction.z += 1
+	if Input.is_action_pressed(&"move_forward"):
+		direction.z -= 1
+
+	if direction != Vector3.ZERO:
+		direction = direction.normalized()
+		# Rotate the character to face the movement direction.
+		basis = Basis.looking_at(direction)
+		$AnimationPlayer.speed_scale = 4
+	else:
+		$AnimationPlayer.speed_scale = 1
+
+	velocity.x = direction.x * speed
+	velocity.z = direction.z * speed
+
+	# Jump when on the floor.
+	if is_on_floor() and Input.is_action_just_pressed(&"jump"):
+		velocity.y += jump_impulse
+
+	# Gravity applied every frame so is_on_floor() stays reliable.
+	velocity.y -= fall_acceleration * delta
+	move_and_slide()
+
+	# Detect landing on top of a mob and bounce.
+	for index in range(get_slide_collision_count()):
+		var collision = get_slide_collision(index)
+		if collision.get_collider().is_in_group(&"mob"):
+			var mob = collision.get_collider()
+			if Vector3.UP.dot(collision.get_normal()) > 0.1:
+				mob.squash()
+				velocity.y = bounce_impulse
+				break
+
+	# Arc the character forward/back based on vertical velocity.
+	rotation.x = PI / 6 * velocity.y / jump_impulse
+```
+
+After `move_and_slide()` runs, the code iterates `get_slide_collision_count()` to find collisions with objects in the `mob` group. A dot product against `Vector3.UP` confirms the player landed on top of — rather than walked into — the mob before calling `mob.squash()`.
+
+### How mobs are spawned and directed
+
+`Main.gd` instantiates mob scenes at random positions along a `Path3D` and passes the player's current position so mobs orient toward the player:
+
+```gdscript
+# Main.gd — mob spawning
+func _on_mob_timer_timeout():
+	var mob = mob_scene.instantiate()
+	var mob_spawn_location = get_node(^"SpawnPath/SpawnLocation")
+	mob_spawn_location.progress_ratio = randf()
+
+	var player_position = $Player.position
+	mob.initialize(mob_spawn_location.position, player_position)
+	add_child(mob)
+	mob.squashed.connect($UserInterface/ScoreLabel._on_Mob_squashed)
+```
+
+`Main.gd` also detects the Compatibility renderer at startup and compensates for its sRGB blending difference by splitting the directional light into two instances — one for the sky and one for scene objects — at different energy levels.
+
+### Mob movement
+
+Each mob is also a `CharacterBody3D`. Its `initialize()` method calculates an initial velocity vector by starting from `Vector3.FORWARD`, rotating it to match the mob's `look_at` orientation, and applying a random speed. Because `velocity` is already set, `_physics_process` only needs to call `move_and_slide()`:
+
+```gdscript
+# Mob.gd
+extends CharacterBody3D
+
+signal squashed
+
+@export var min_speed = 10
+@export var max_speed = 18
+
+
+func _physics_process(_delta):
+	move_and_slide()
+
+
+func initialize(start_position, player_position):
+	var target = Vector3(player_position.x, start_position.y, player_position.z)
+	look_at_from_position(start_position, target, Vector3.UP)
+	rotate_y(randf_range(-PI / 4, PI / 4))
+
+	var random_speed = randf_range(min_speed, max_speed)
+	velocity = Vector3.FORWARD * random_speed
+	velocity = velocity.rotated(Vector3.UP, rotation.y)
+	$AnimationPlayer.speed_scale = random_speed / min_speed
+
+
+func squash():
+	squashed.emit()
+	queue_free()
+```
+
+### Studying this demo step by step
+
+<Steps>
+  <Step title="Open the project">
+    Open `3d/squash_the_creeps/` in the Godot editor and press **F5** to run it.
+  </Step>
+  <Step title="Read Player.gd">
+    Open `Player.gd` and trace the flow: input → `direction` → `velocity` → `move_and_slide()` → collision loop. Notice that gravity is applied manually every frame rather than through a physics property.
+  </Step>
+  <Step title="Read Mob.gd">
+    Compare `initialize()` with the player's movement. Mobs set their velocity once and never read input — `move_and_slide()` carries them forward indefinitely.
+  </Step>
+  <Step title="Read Main.gd">
+    See how `_on_mob_timer_timeout()` chooses a spawn position and communicates it to the mob via `initialize()`. Note the renderer detection block in `_ready()` that adjusts shadow quality for Compatibility.
+  </Step>
+  <Step title="Experiment">
+    Change `@export var speed` or `fall_acceleration` in the Inspector while the game is paused to understand how each constant affects feel. No code edits required.
+  </Step>
+</Steps>
+
+---
+
+## kinematic_character
+
+The `kinematic_character` demo (`3d/kinematic_character/`) shows a cube-shaped `CharacterBody3D` navigating a 3D obstacle course. Unlike `squash_the_creeps`, the input direction is transformed through the camera's basis so the character always moves relative to where the camera is looking:
+
+```gdscript
+# player/cubio.gd
+extends CharacterBody3D
+
+const MAX_SPEED = 3.5
+const JUMP_SPEED = 6.5
+const ACCELERATION = 4
+const DECELERATION = 4
+
+@onready var camera: Camera3D = $Target/Camera3D
+@onready var gravity := float(-ProjectSettings.get_setting("physics/3d/default_gravity"))
+
+
+func _physics_process(delta: float) -> void:
+	var dir := Vector3()
+	dir.x = Input.get_axis(&"move_left", &"move_right")
+	dir.z = Input.get_axis(&"move_forward", &"move_back")
+
+	# Strip the camera's X (pitch) so only the horizontal facing is used.
+	var cam_basis := camera.global_transform.basis
+	cam_basis = cam_basis.rotated(cam_basis.x, -cam_basis.get_euler().x)
+	dir = cam_basis * dir
+
+	if dir.length_squared() > 1:
+		dir /= dir.length()
+
+	velocity.y += delta * gravity
+
+	var hvel := velocity
+	hvel.y = 0
+	var target := dir * MAX_SPEED
+	var acceleration := ACCELERATION if dir.dot(hvel) > 0 else DECELERATION
+	hvel = hvel.lerp(target, acceleration * delta)
+
+	velocity.x = hvel.x
+	velocity.z = hvel.z
+	move_and_slide()
+
+	if is_on_floor() and Input.is_action_pressed(&"jump"):
+		velocity.y = JUMP_SPEED
+```
+
+The camera-relative direction is computed by removing the camera's pitch from its basis before multiplying with the input vector. Horizontal velocity is interpolated toward the target speed with separate acceleration and deceleration values. Renderer: **Forward+**.
+
+---
+
+## rigidbody_character
+
+`rigidbody_character` (`3d/rigidbody_character/`) builds a character on `RigidBody3D` rather than `CharacterBody3D`. This trades precise control for realistic reaction to external forces — the character tumbles when hit rather than sliding cleanly along surfaces. Use this pattern when physical interactions between the character and other rigid bodies matter more than tight control feel.
+
+---
+
+## truck_town
+
+`truck_town` (`3d/truck_town/`) demonstrates Godot's vehicle physics using `VehicleBody3D` and `VehicleWheel3D`. Three vehicle configurations are included:
+
+- **Simple truck** — single `VehicleBody3D` with four `VehicleWheel3D` nodes.
+- **Trailer truck** — cab and trailer connected by `ConeTwistJoint3D`.
+- **Tow truck** — cab with a chain of `RigidBody3D` links pinned together by `PinJoint3D` nodes.
+
+The on-screen speedometer reads `linear_velocity.length()` from the `VehicleBody3D` and converts the result to m/s, km/h, or mph depending on the selected unit:
+
+```gdscript
+# speedometer.gd
+extends Button
+
+var car_body: VehicleBody3D
+
+@export var tint_gradient: Gradient
+@export var speed_unit: SpeedUnit = SpeedUnit.METERS_PER_SECOND
+
+
+func _process(_delta: float) -> void:
+	var speed := car_body.linear_velocity.length()
+	if speed_unit == SpeedUnit.METERS_PER_SECOND:
+		text = "Speed: " + ("%.1f" % speed) + " m/s"
+	elif speed_unit == SpeedUnit.KILOMETERS_PER_HOUR:
+		speed *= 3.6
+		text = "Speed: " + ("%.0f" % speed) + " km/h"
+	else:
+		speed *= 2.23694
+		text = "Speed: " + ("%.0f" % speed) + " mph"
+
+	add_theme_color_override(
+		&"font_color",
+		tint_gradient.sample(remap(car_body.linear_velocity.length(), 0.0, 30.0, 0.0, 1.0))
+	)
+```
+
+The speedometer's font color is tinted using a `Gradient` resource sampled by the current speed, giving real-time visual feedback on acceleration. Renderer: **Forward+**.
+
+---
+
+## ragdoll_physics
+
+`ragdoll_physics` (`3d/ragdoll_physics/`) lets you click anywhere on the floor to drop a mannequin ragdoll. The ragdoll's physical bones are activated on spawn, and slow-motion is toggled by holding a key. The scene controller uses a physics ray cast to find the surface point under the cursor and spawns the ragdoll there:
+
+```gdscript
+# ragdoll_physics.gd (excerpt)
+if input_event.is_action_pressed(&"place_ragdoll"):
+	var origin := camera.global_position
+	var target := camera.project_position(get_viewport().get_mouse_position(), 100)
+	var query := PhysicsRayQueryParameters3D.create(origin, target)
+	var result := camera.get_world_3d().direct_space_state.intersect_ray(query)
+
+	if not result.is_empty():
+		var ragdoll := preload("res://characters/mannequiny_ragdoll.tscn").instantiate()
+		ragdoll.position = result["position"] + Vector3(0.0, 0.5, 0.0)
+		ragdoll.rotation.y = camera_pivot.rotation.y
+		ragdoll.initial_velocity = Vector3.FORWARD.rotated(
+			Vector3.UP, randf_range(0, TAU)
+		) * INITIAL_VELOCITY_STRENGTH
+		add_child(ragdoll)
+
+if input_event.is_action_pressed(&"slow_motion"):
+	Engine.time_scale = 0.25
+	AudioServer.playback_speed_scale = 0.5
+```
+
+`Engine.time_scale` slows down all physics and animation simultaneously. `AudioServer.playback_speed_scale` is set to the square root of the time scale to keep audio pitch at a perceptually natural level.
+
+<Note>
+Shadow `directional_shadow_max_distance` is updated dynamically as the camera zooms, keeping shadows crisp regardless of zoom level without wasting resolution on the full scene at once.
+</Note>
+
+---
+
+## soft_body_physics
+
+`soft_body_physics` (`3d/soft_body_physics/`) explores `SoftBody3D` through eight test scenarios: cloth simulation, soft spheres, pinned-corner cloth, impulse-driven cloth, wind-force cloth, and combined rigid/soft interactions. The demo applies forces per-frame through `_physics_process`:
+
+```gdscript
+# tester.gd (excerpt) — constant wind force on a cloth
+const WIND_FORCE: float = 2_450_000.0
+
+func _physics_process(delta: float) -> void:
+	for node in $Testers/CentralForceWind.get_children():
+		if node is SoftBody3D:
+			node.apply_central_force(Vector3(1.0, 0.0, 0.0) * WIND_FORCE * delta)
+```
+
+`apply_central_force()` distributes the force across all soft-body points. For per-point control, `apply_impulse(point_index, impulse)` targets individual vertices — used here to flap the four corners of a cloth sheet.
+
+---
+
+## physics_tests
+
+`physics_tests` (`3d/physics_tests/`) is a test suite rather than a game demo. It covers joint types, convex/concave collision shapes, kinematic vs. rigid interactions, and ray/shape casts. Use it to reproduce or isolate physics bugs when developing your own projects.
+
+---
+
+## physics_interpolation
+
+`physics_interpolation` (`3d/physics_interpolation/`) demonstrates Godot's built-in physics interpolation, which smooths visual position between physics ticks. This is separate from `move_and_slide()` — it affects how the rendered transform is interpolated when the physics tick rate is lower than the display frame rate. The `kinematic_character` demo also calls `reset_physics_interpolation()` after teleporting the player to prevent a one-frame visual glitch.

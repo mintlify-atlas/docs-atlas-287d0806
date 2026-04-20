@@ -1,0 +1,346 @@
+---
+title: "2D Shaders & Visual Effects Demos in Godot 4"
+description: "Learn sprite shaders, screen-space post-process effects, WorldEnvironment glow, GPUParticles2D, Light2D shadows, Tween animation, and CanvasItem drawing."
+---
+
+Godot's 2D rendering pipeline supports visual effects at several levels: per-sprite GLSL shaders written in Godot's shader language, full-screen canvas-item post-processing, environment-level bloom via `WorldEnvironment`, GPU and CPU particle systems, and the `Light2D` family of nodes for dynamic illumination. The demos in this group each isolate one or two of these systems so you can study the technique and copy it into your own project.
+
+## sprite_shaders — per-sprite canvas_item shaders
+
+`sprite_shaders` bundles nine different shaders applied to a single sprite image. Each shader lives in its own `.gdshader` file under `shaders/` and is attached to a `Sprite2D` node as a `ShaderMaterial`. You can use any of them directly as starting points.
+
+**Available shaders:**
+
+| File | Effect |
+|------|--------|
+| `outline.gdshader` | Pixel-wide outline in a configurable color |
+| `blur.gdshader` | Simple box blur |
+| `glow.gdshader` | Additive glow spread from the sprite edges |
+| `dropshadow.gdshader` | Drop shadow at a fixed offset |
+| `offsetshadow.gdshader` | Drop shadow with adjustable direction |
+| `aura.gdshader` | Pulsing aura around the sprite boundary |
+| `fatty.gdshader` | Inflate/deflate the sprite silhouette |
+| `silouette.gdshader` | Render only the silhouette in a flat color |
+| `dissintegrate.gdshader` | Dissolve effect controlled by a uniform |
+
+All shaders use `shader_type canvas_item;` — the correct type for 2D sprites and UI nodes.
+
+### Outline shader
+
+The outline shader samples four neighboring pixels and compares their alpha values. Wherever the sprite edge transitions from opaque to transparent, it draws the outline color:
+
+```gdshader
+shader_type canvas_item;
+
+uniform float outline_width = 2.0;
+uniform vec4 outline_color : source_color;
+
+void fragment() {
+    vec4 col = texture(TEXTURE, UV);
+    vec2 ps = TEXTURE_PIXEL_SIZE;
+    float a;
+    float maxa = col.a;
+    float mina = col.a;
+
+    a = texture(TEXTURE, UV + vec2(0.0, -outline_width) * ps).a;
+    maxa = max(a, maxa);
+    mina = min(a, mina);
+
+    a = texture(TEXTURE, UV + vec2(0.0, outline_width) * ps).a;
+    maxa = max(a, maxa);
+    mina = min(a, mina);
+
+    a = texture(TEXTURE, UV + vec2(-outline_width, 0.0) * ps).a;
+    maxa = max(a, maxa);
+    mina = min(a, mina);
+
+    a = texture(TEXTURE, UV + vec2(outline_width, 0.0) * ps).a;
+    maxa = max(a, maxa);
+    mina = min(a, mina);
+
+    COLOR = mix(col, outline_color, maxa - mina);
+}
+```
+
+`TEXTURE_PIXEL_SIZE` is a built-in uniform that gives the size of one texel in UV space, so `outline_width` is measured in texels regardless of the sprite's display size.
+
+### Sprite glow shader
+
+The glow shader samples neighbors at two radii and averages them, then blends the result additively onto the original pixel:
+
+```gdshader
+shader_type canvas_item;
+render_mode blend_premul_alpha;
+
+uniform float radius = 5.0;
+uniform float amount = 0.25;
+
+void fragment() {
+    float r = radius;
+    vec2 ps = TEXTURE_PIXEL_SIZE;
+    vec4 col = texture(TEXTURE, UV);
+    vec4 glow = col;
+
+    glow += texture(TEXTURE, UV + vec2(-r, -r) * ps);
+    glow += texture(TEXTURE, UV + vec2(-r, 0.0) * ps);
+    // ... 6 more neighbors at radius r ...
+
+    r *= 2.0;
+    glow += texture(TEXTURE, UV + vec2(-r, -r) * ps);
+    // ... 7 more neighbors at radius r*2 ...
+
+    glow /= 17.0;
+    glow *= amount;
+    col.rgb *= col.a;
+    COLOR = glow + col;
+}
+```
+
+<Tip>
+  Increase `radius` for a softer spread and adjust `amount` to control brightness. Because this is a per-sprite shader, it does not require the Forward+ renderer — it works in Compatibility.
+</Tip>
+
+---
+
+## screen_space_shaders — full-screen post-process effects
+
+`screen_space_shaders` implements 11 full-screen effects, each as a separate `.gdshader` file. A `ColorRect` node covers the entire viewport and carries the active shader as its material. The GDScript controller (`screen_shaders.gd`) populates two `OptionButton` menus at runtime — one for the background image and one for the effect — and shows or hides the corresponding nodes:
+
+```gdscript
+extends Control
+
+@onready var effect: OptionButton = $Effect
+@onready var effects: Control = $Effects
+@onready var picture: OptionButton = $Picture
+@onready var pictures: Control = $Pictures
+
+func _ready() -> void:
+    for c in pictures.get_children():
+        picture.add_item("PIC: " + String(c.get_name()))
+    for c in effects.get_children():
+        effect.add_item("FX: " + String(c.get_name()))
+
+func _on_effect_item_selected(id: int) -> void:
+    for c in effects.get_child_count():
+        if id == c:
+            effects.get_child(c).show()
+        else:
+            effects.get_child(c).hide()
+```
+
+**Available effects:**
+
+| File | Effect |
+|------|--------|
+| `whirl.gdshader` | Spiral distortion around screen center |
+| `old_film.gdshader` | Film grain, vignette, scan lines |
+| `blur.gdshader` | Full-screen box blur |
+| `sepia.gdshader` | Sepia tone color grading |
+| `negative.gdshader` | Colour inversion |
+| `vignette.gdshader` | Dark edges toward screen corners |
+| `pixelize.gdshader` | Downsampling pixellation |
+| `BCS.gdshader` | Brightness, contrast, saturation sliders |
+| `contrasted.gdshader` | Hard contrast boost |
+| `mirage.gdshader` | Heat-haze wave distortion |
+| `normalized.gdshader` | Histogram normalization |
+
+### Whirl shader
+
+Screen-space shaders read from `hint_screen_texture` — a sampler that gives access to what was rendered before this node:
+
+```gdshader
+shader_type canvas_item;
+
+uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
+uniform float rotation = 3.0;
+
+void fragment() {
+    vec2 uv = SCREEN_UV;
+    vec2 rel = uv - vec2(0.5, 0.5);
+    float angle = length(rel) * rotation;
+    mat2 rot = mat2(vec2(cos(angle), -sin(angle)), vec2(sin(angle), cos(angle)));
+    rel = rot * rel;
+    uv = clamp(rel + vec2(0.5, 0.5), vec2(0.0, 0.0), vec2(1.0, 1.0));
+    COLOR.rgb = textureLod(screen_texture, uv, 0.0).rgb;
+}
+```
+
+The `rotation` uniform controls the strength of the whirl. At `0.0` the image is unchanged; increasing the value tightens the spiral.
+
+<Note>
+  `hint_screen_texture` copies the screen into a texture before this shader runs. Place the `ColorRect` carrying the shader at the top of the scene tree (high `z_index`) so it composites over all other nodes.
+</Note>
+
+---
+
+## glow — WorldEnvironment bloom for 2D
+
+`glow` demonstrates how to add bloom to a 2D scene using the `WorldEnvironment` node rather than a sprite shader. This produces physically-based light bleed where bright areas spill light onto darker surroundings, and it requires the **Forward+** renderer.
+
+The demo shows a cave scene that you drag left and right. A toggle switches a custom `glow_map` texture on and off — a texture that masks which parts of the image contribute to the glow:
+
+```gdscript
+extends Node2D
+
+const CAVE_LIMIT = 1000
+var glow_map := preload("res://glow_map.webp")
+
+@onready var cave: Node2D = $Cave
+
+func _unhandled_input(input_event: InputEvent) -> void:
+    if input_event is InputEventMouseMotion and input_event.button_mask > 0:
+        cave.position.x = clampf(
+            cave.position.x + input_event.screen_relative.x,
+            -CAVE_LIMIT, 0
+        )
+
+    if input_event.is_action_pressed(&"toggle_glow_map"):
+        if $WorldEnvironment.environment.glow_map:
+            $WorldEnvironment.environment.glow_map = null
+            $WorldEnvironment.environment.glow_intensity = 0.8
+        else:
+            $WorldEnvironment.environment.glow_map = glow_map
+            # Compensate for the glow map darkening parts of the bloom.
+            $WorldEnvironment.environment.glow_intensity = 1.6
+```
+
+The glow map is a greyscale texture where white pixels allow full bloom and black pixels suppress it. This lets you make glowing signs and lit windows stand out while keeping ambient areas calm.
+
+<Note>
+  `WorldEnvironment` glow requires **Forward+**. If you need glow on Compatibility or Mobile, use the per-sprite `glow.gdshader` from the `sprite_shaders` demo instead.
+</Note>
+
+---
+
+## particles — GPUParticles2D and ParticleProcessMaterial
+
+`particles` showcases Godot's GPU particle system for fire, smoke, and sparks. All emitters use `GPUParticles2D` nodes with `ParticleProcessMaterial` resources.
+
+**Renderer: Mobile.**
+
+**Key configuration notes:**
+- `ParticleProcessMaterial` is shared between 2D and 3D particles. In 2D you must enable the **"Disable Z"** flag on the material; otherwise particles spread into the Z axis and appear at incorrect screen positions.
+- Flipbook animation (animated sprites on particles) is configured on the material's **Emission** and **Animation** sections.
+- The demo includes both point emitters and image-outline emitters that emit particles along the edge of a texture silhouette.
+
+<Tip>
+  `GPUParticles2D` requires the GPU to support compute shaders. If you need to target very old hardware, use `CPUParticles2D` instead — it has the same interface but runs on the CPU.
+</Tip>
+
+---
+
+## lights_and_shadows — Light2D and LightOccluder2D
+
+`lights_and_shadows` places multiple `PointLight2D` nodes and one `DirectionalLight2D` in a scene and pairs each with `LightOccluder2D` shapes that cast hard or soft shadows. A GDScript controller lets you toggle each light type and cycle through shadow filter quality settings at runtime:
+
+```gdscript
+extends Node2D
+
+func _input(input_event: InputEvent) -> void:
+    if input_event.is_action_pressed(&"toggle_directional_light"):
+        $DirectionalLight2D.visible = not $DirectionalLight2D.visible
+
+    if input_event.is_action_pressed(&"toggle_point_lights"):
+        for point_light in get_tree().get_nodes_in_group(&"point_light"):
+            point_light.visible = not point_light.visible
+
+    if input_event.is_action_pressed(&"cycle_directional_light_shadows_quality"):
+        $DirectionalLight2D.shadow_filter = wrapi($DirectionalLight2D.shadow_filter + 1, 0, 3)
+
+    if input_event.is_action_pressed(&"cycle_point_light_shadows_quality"):
+        for point_light in get_tree().get_nodes_in_group(&"point_light"):
+            point_light.shadow_filter = wrapi(point_light.shadow_filter + 1, 0, 3)
+```
+
+`wrapi(value + 1, 0, 3)` cycles through shadow filter modes (None → PCF5 → PCF13) without a chain of `if` statements. The Godot logo in the scene uses a normal map (`godot_normal.png`) so the point lights produce surface-relief shading.
+
+---
+
+## light2d_as_mask — Light2D blend modes for visibility masking
+
+`light2d_as_mask` repurposes a `Light2D` node as a visibility mask. By setting the light's blend mode to **Mix** (or **Subtract**) and adjusting which canvas layers it affects, you can reveal or hide parts of the scene — for example, creating a "fog of war" or a flashlight cone effect where only the lit area is visible to the player.
+
+The demo uses a paint-splat texture as the light shape and blends it over a photograph. Only the regions inside the light shape are visible; everything else is darkened or hidden.
+
+---
+
+## tween — Tween chaining, parallel steps, and method tweening
+
+`tween` is an advanced showcase of Godot's `Tween` API. It covers every major Tween feature through a step-by-step animation sequence you can enable or disable individually.
+
+<Tabs>
+  <Tab title="Basic property tween">
+    Animate a property from its current value to a target over a duration, with a chosen easing and transition curve:
+
+    ```gdscript
+    tween = create_tween().set_speed_scale(%SpeedSlider.value)
+    var tweener := tween.tween_property(icon, ^"position", Vector2(400, 250), 1.0)
+    tweener.set_ease(%Ease1.selected)
+    tweener.set_trans(%Trans1.selected)
+    ```
+  </Tab>
+  <Tab title="Parallel steps">
+    Run two tweeners at the same time by calling `.parallel()` before the second one. Here the icon moves left while also jumping via a sub-Tween:
+
+    ```gdscript
+    tween.tween_property(icon, ^"position", Vector2.LEFT * 200, 1.0).as_relative()
+    tween.parallel().tween_callback(func():
+        sub_tween = create_tween().set_trans(Tween.TRANS_SINE)
+        sub_tween.tween_property(icon, ^"position:y", -150.0, 0.5).as_relative().set_ease(Tween.EASE_OUT)
+        sub_tween.tween_property(icon, ^"position:y",  150.0, 0.5).as_relative().set_ease(Tween.EASE_IN)
+    )
+    ```
+  </Tab>
+  <Tab title="Method tweening">
+    Animate any value by calling a method each frame with the interpolated result. This example moves the icon along a `Path2D` curve:
+
+    ```gdscript
+    var tweener := tween.tween_method(
+        func(v: float) -> void:
+            icon.position = path.position + path.curve.sample_baked(v),
+        0.0, path.curve.get_baked_length(), 3.0
+    )
+    tweener.set_ease(%Ease7.selected)
+    tweener.set_trans(%Trans7.selected)
+    ```
+  </Tab>
+</Tabs>
+
+Key patterns demonstrated by the demo:
+
+- `set_loops()` without arguments creates an infinite looping tween.
+- `tween_interval(seconds)` inserts a plain wait step between animations.
+- `as_relative()` makes the target value relative to the current property value rather than absolute.
+- `tween.kill()` immediately stops and frees a tween; call it before starting a new one on the same object to avoid conflicts.
+
+---
+
+## custom_drawing — CanvasItem._draw() for procedural 2D
+
+`custom_drawing` shows how to draw lines, polygons, rectangles, meshes, textures, and text directly in `_draw()` without creating dedicated nodes. This is useful for debug visualisation, procedural graphics, and performance-critical rendering where creating hundreds of `Line2D` or `Polygon2D` nodes would be expensive.
+
+The demo is split into tabs, each implemented as a separate script (`lines.gd`, `polygons.gd`, `meshes.gd`, etc.) that extends `Control` and overrides `_draw()`. A controller node manages antialiasing mode and calls `queue_redraw()` on all tabs when the setting changes:
+
+```gdscript
+extends Control
+
+func _on_msaa_2d_item_selected(index: int) -> void:
+    get_viewport().msaa_2d = index as Viewport.MSAA
+
+func _on_draw_antialiasing_toggled(toggled_on: bool) -> void:
+    var nodes: Array[Node] = %TabContainer.get_children()
+    nodes.push_back(%AnimationSlice)
+    for tab: Control in nodes:
+        tab.use_antialiasing = toggled_on
+        tab.queue_redraw()
+```
+
+**Renderer: Mobile** (required for 2D MSAA antialiasing).
+
+**Antialiasing options:**
+- Pass `antialiasing = true` to `draw_line()`, `draw_polyline()`, and `draw_arc()` for per-method antialiasing — available on all renderers.
+- Enable 2D MSAA in **Project Settings → Rendering → Anti-Aliasing** for global antialiasing that covers all `draw_*` calls — requires Mobile or Forward+ renderer.
+
+<Note>
+  Call `queue_redraw()` on a `CanvasItem` whenever its drawn content needs to update. Godot does not automatically re-run `_draw()` every frame — it only calls it after `queue_redraw()` or when the node first enters the scene tree.
+</Note>

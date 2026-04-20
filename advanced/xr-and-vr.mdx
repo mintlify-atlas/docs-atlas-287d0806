@@ -1,0 +1,218 @@
+---
+title: "XR and VR: OpenXR, WebXR, and mobile VR demos"
+description: "Explore eight Godot XR demos covering OpenXR hand tracking, composition layers, locomotion styles, controller rendering, WebXR browser sessions, and mobile VR."
+---
+
+Godot 4 ships with a first-class XR subsystem built on top of the OpenXR specification. Every XR session in Godot starts with `XRServer`, which discovers available interfaces — `OpenXRInterface`, `WebXRInterface`, or `MobileVRInterface` — and routes pose, input, and display data through them. The eight demos in the `xr/` folder walk you through every major piece of that pipeline: starting a session, reading controller poses, rendering hand skeletons, placing UI on composition layers, handling locomotion that does not cause motion sickness, letting the runtime render its own controller models, and shipping a VR experience to the web or a standalone mobile headset without a PC.
+
+<Note>
+  All OpenXR demos require an OpenXR-compatible HMD. For PCVR, install SteamVR or the Oculus client runtime before running the demos. For standalone Android devices, follow the [deploying to Android guide](https://docs.godotengine.org/en/stable/tutorials/xr/deploying_to_android.html) to install Android build templates and the OpenXR loader plugin.
+</Note>
+
+## Setting up OpenXR in a new project
+
+<Steps>
+  <Step title="Enable the OpenXR interface">
+    Open **Project > Project Settings**, navigate to **XR > OpenXR**, and toggle **Enabled** on. Godot will automatically start the OpenXR runtime when the game launches.
+  </Step>
+  <Step title="Add XROrigin3D to your scene">
+    Insert an `XROrigin3D` node as the root of your XR rig. This node defines the real-world tracking origin. Add an `XRCamera3D` child for the player's view, and `XRController3D` children for the left and right hands.
+  </Step>
+  <Step title="Initialize the interface at runtime">
+    Attach a script to a node in your scene that finds the interface and enables XR on the viewport:
+
+    ```gdscript
+    extends Node3D
+
+    var xr_interface: OpenXRInterface
+
+    func _ready() -> void:
+        xr_interface = XRServer.find_interface("OpenXR")
+        if xr_interface and xr_interface.is_initialized():
+            var vp: Viewport = get_viewport()
+            vp.use_xr = true
+            DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+
+            if RenderingServer.get_rendering_device():
+                vp.vrs_mode = Viewport.VRS_XR
+
+            xr_interface.session_begun.connect(_on_openxr_session_begun)
+            xr_interface.session_focussed.connect(_on_openxr_focused_state)
+            xr_interface.session_stopping.connect(_on_openxr_stopping)
+        else:
+            print("OpenXR not instantiated!")
+            get_tree().quit()
+    ```
+  </Step>
+  <Step title="Match the physics rate to the display refresh rate">
+    Inside the `session_begun` callback, query the runtime for its supported refresh rates and pick the highest one at or below your target cap. Then synchronize `Engine.physics_ticks_per_second` to that rate so physics does not jitter relative to the display.
+
+    ```gdscript
+    func _on_openxr_session_begun() -> void:
+        var current_refresh_rate := xr_interface.get_display_refresh_rate()
+        var new_rate := current_refresh_rate
+        var available_rates: Array = xr_interface.get_available_display_refresh_rates()
+        for rate in available_rates:
+            if rate > new_rate and rate <= maximum_refresh_rate:
+                new_rate = rate
+        if current_refresh_rate != new_rate:
+            xr_interface.set_display_refresh_rate(new_rate)
+        Engine.physics_ticks_per_second = roundi(new_rate)
+    ```
+  </Step>
+  <Step title="Handle session focus">
+    Pause your game when the player removes their headset (`session_visible`) and resume it when they put it back on (`session_focussed`). Both signals are emitted by `OpenXRInterface`.
+  </Step>
+</Steps>
+
+## The eight XR demos
+
+<CardGroup cols={2}>
+  <Card title="openxr_hand_tracking_demo" icon="hand" href="#hand-tracking">
+    Hand tracking and controller tracking using the OpenXR hand tracking API. Demonstrates both optical hand tracking and controller-inferred hand poses with a fallback skeleton modifier.
+  </Card>
+  <Card title="openxr_composition_layers" icon="layer-group" href="#composition-layers">
+    Quad and equirectangular composition layers for rendering crisp 2D UI panels directly in the compositor rather than as in-world geometry.
+  </Card>
+  <Card title="openxr_character_centric_movement" icon="person" href="#character-centric-movement">
+    Character-centric locomotion where the `CharacterBody3D` follows the player's physical movement and controller joystick input while handling collisions with blackout fade.
+  </Card>
+  <Card title="openxr_origin_centric_movement" icon="arrows-up-down" href="#origin-centric-movement">
+    Origin-centric locomotion where the `XROrigin3D` itself moves through the scene, matching the simpler movement model used in many VR games.
+  </Card>
+  <Card title="openxr_binding_modifier_demo" icon="sliders" href="#binding-modifier">
+    Action binding modifiers that let you remap and transform raw controller inputs before they reach your action map — useful for dead-zone tuning and haptic customisation.
+  </Card>
+  <Card title="openxr_render_models" icon="eye" href="#render-models">
+    Rendering the controller model provided by the OpenXR runtime, so players see the exact physical controller they are holding rather than a generic hand mesh.
+  </Card>
+  <Card title="webxr" icon="globe" href="#webxr">
+    Running an immersive-VR session inside the browser using the `WebXRInterface`. Shows the asynchronous session lifecycle and how to read controller input from `WebXRInterface` trackers.
+  </Card>
+  <Card title="mobile_vr_interface_demo" icon="mobile-screen" href="#mobile-vr">
+    Google Cardboard-style split-screen stereoscopic rendering on Android using `MobileVRInterface`, with touch-based movement controls.
+  </Card>
+</CardGroup>
+
+## Hand tracking
+
+The `openxr_hand_tracking_demo` shows how to handle both optical hand tracking and controller-based hand pose display from a single code path. The core challenge is that some runtimes provide hand joint data only for optical tracking, while others synthesise joint poses from controller input. The demo solves this with a fallback skeleton modifier that animates fingers from trigger and grip inputs when optical data is unavailable.
+
+The `hand_controller.gd` script, attached to each `XRController3D`, switches between the `palm_pose` and the `grip` fallback at runtime:
+
+```gdscript
+extends XRController3D
+
+func _process(delta):
+    var controller_tracker: XRControllerTracker = XRServer.get_tracker(tracker)
+    if controller_tracker:
+        var new_pose: String = "palm_pose"
+        var xr_pose: XRPose = controller_tracker.get_pose(new_pose)
+        if not xr_pose or xr_pose.tracking_confidence == XRPose.XR_TRACKING_CONFIDENCE_NONE:
+            new_pose = "grip"
+
+        if pose != new_pose:
+            pose = new_pose
+```
+
+<Note>
+  The hand tracking API uses trackers named `/user/hand_tracker/left` and `/user/hand_tracker/right`. These are separate from the action map trackers `left_hand` and `right_hand`. This demo requires Godot 4.4 or later. If you upgrade from an older project, open **Project Settings > XR > OpenXR** and enable the hand tracking source extensions.
+</Note>
+
+## Composition layers
+
+The `openxr_composition_layers` demo places UI panels directly into the OpenXR compositor using `OpenXRCompositionLayerQuad` and `OpenXRCompositionLayerEquirect` nodes. Compositor layers bypass the 3D renderer entirely and are composited by the runtime at full display resolution, which eliminates the blur and aliasing that affect in-world `SubViewport` UI. The demo responds to haptic feedback when the player selects a pointer hand:
+
+```gdscript
+func _on_right_hand_button_pressed(action_name):
+    if action_name == "select":
+        $XROrigin3D/LeftHand/Pointer.visible = false
+        $XROrigin3D/RightHand/Pointer.visible = true
+        active_hand = $XROrigin3D/RightHand
+        $XROrigin3D/OpenXRCompositionLayerEquirect.controller = active_hand
+        active_hand.trigger_haptic_pulse("haptic", 0.0, 1.0, 0.5, 0.0)
+```
+
+## Character-centric movement
+
+The `openxr_character_centric_movement` demo attaches the `XROrigin3D` as a child of a `CharacterBody3D`. Physical head movement is converted into `move_and_slide()` calls so that the physics body collides with the world. When the body cannot follow the player's physical movement — for example, if the player physically walks into a wall — the view fades to black to prevent nausea. Joystick input on the controllers adds smooth rotation and forward movement:
+
+```gdscript
+func _process_movement_on_input(is_colliding: bool, delta: float) -> void:
+    if not is_colliding:
+        var movement_input := _get_movement_input()
+        rotation.y += -movement_input.x * delta * rotation_speed
+        var direction := global_transform.basis * Vector3(0.0, 0.0, -movement_input.y) * movement_speed
+        if direction:
+            velocity.x = move_toward(velocity.x, direction.x, delta * movement_acceleration)
+            velocity.z = move_toward(velocity.z, direction.z, delta * movement_acceleration)
+        else:
+            velocity.x = move_toward(velocity.x, 0, delta * movement_acceleration)
+            velocity.z = move_toward(velocity.z, 0, delta * movement_acceleration)
+    velocity.y -= gravity * delta
+    move_and_slide()
+```
+
+## Origin-centric movement
+
+The `openxr_origin_centric_movement` demo uses the simpler pattern of moving the `XROrigin3D` node directly with controller input. This avoids the complexity of syncing a `CharacterBody3D` with the headset position but means physics collisions must be handled separately if needed. Compare the two locomotion demos side by side to understand the tradeoffs before choosing a movement model for your project.
+
+## Binding modifier
+
+The `openxr_binding_modifier_demo` shows `OpenXRActionBindingModifier` resources, which sit between raw hardware inputs and action values. You attach a modifier to an action binding in your action map to apply dead-zone thresholds, invert axes, or scale values before they reach `get_vector2()` and `is_button_pressed()`. This is purely a data-driven feature: no GDScript is needed to configure the modifiers; everything is set up in the OpenXR action map resource.
+
+## Render models
+
+The `openxr_render_models` demo enables `OpenXRRenderModel` nodes, which ask the active OpenXR runtime for the mesh and textures that represent the physical controller the player is holding. When the runtime provides a model, it is automatically rendered at the correct position and orientation. This is the recommended way to display controllers because it guarantees the visual matches what the player sees in their hands in the real world, regardless of which headset or controller generation they use.
+
+## WebXR
+
+The `webxr/main.gd` demo shows the full asynchronous lifecycle required by the browser WebXR API. You find the interface, connect to its signals, and call `is_session_supported` to probe for capability before presenting the **Enter VR** button. Session start and stop toggle `get_viewport().use_xr`:
+
+```gdscript
+func _ready() -> void:
+    webxr_interface = XRServer.find_interface("WebXR")
+    if webxr_interface:
+        webxr_interface.session_supported.connect(_webxr_session_supported)
+        webxr_interface.session_started.connect(_webxr_session_started)
+        webxr_interface.session_ended.connect(_webxr_session_ended)
+        webxr_interface.session_failed.connect(_webxr_session_failed)
+        webxr_interface.is_session_supported("immersive-vr")
+
+func _on_enter_vr_button_pressed() -> void:
+    webxr_interface.session_mode = "immersive-vr"
+    webxr_interface.requested_reference_space_types = "bounded-floor, local-floor, local"
+    webxr_interface.required_features = "local-floor"
+    webxr_interface.optional_features = "bounded-floor"
+    if not webxr_interface.initialize():
+        OS.alert("Failed to initialize WebXR")
+
+func _webxr_session_started() -> void:
+    $CanvasLayer.visible = false
+    get_viewport().use_xr = true
+```
+
+<Tip>
+  Export a WebXR project with the **Web** export template and serve it over HTTPS. Browsers require a secure origin for WebXR sessions.
+</Tip>
+
+## Mobile VR
+
+The `mobile_vr_interface_demo` uses `MobileVRInterface`, which splits the screen into two eye views and applies barrel distortion for use with Cardboard-style head-mounted viewers. You find and initialise it the same way as any other XR interface:
+
+```gdscript
+extends Node3D
+
+var xr_interface: MobileVRInterface
+
+func _ready():
+    xr_interface = XRServer.find_interface("Native mobile")
+    if xr_interface and xr_interface.initialize():
+        var vp = get_viewport()
+        vp.use_xr = true
+        vp.vrs_mode = Viewport.VRS_XR
+    else:
+        get_tree().quit()
+```
+
+The demo adds touch-controlled movement via `Input.is_action_pressed()` for `ui_left`/`ui_right`/`ui_up`/`ui_down`, translating the `XROrigin3D` along the camera's local axes. You can disable lens distortion by setting `xr_interface.k1 = 0.0` and `xr_interface.k2 = 0.0` if you are testing on a flat display.

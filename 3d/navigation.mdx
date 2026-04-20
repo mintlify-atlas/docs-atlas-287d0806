@@ -1,0 +1,283 @@
+---
+title: "3D Navigation and Pathfinding Demos in Godot"
+description: "Four demos covering NavigationAgent3D pathfinding, streaming navigation mesh chunks, 3D waypoint markers, and inverse kinematics with SkeletonIK3D."
+---
+
+Godot's NavigationServer3D handles all pathfinding at the server level, decoupled from the scene tree. A `NavigationRegion3D` node registers a baked `NavigationMesh` with the server, and `NavigationAgent3D` components query the server for paths on demand. This architecture makes it possible to update navigation data at runtime — adding, removing, or re-baking individual regions — without restarting pathfinding for unaffected agents. The demos below progress from a simple single-agent setup to a chunked, streaming navigation mesh suitable for large worlds.
+
+## navigation
+
+`navigation` (`3d/navigation/`) is the starting point for 3D pathfinding. A single robot character navigates a static scene by clicking anywhere on the navigation mesh surface with the mouse. The path is visualized using a custom `Line3D` class built on `ImmediateMesh`.
+
+Renderer: **Compatibility**
+
+### Querying the navigation server
+
+The scene controller converts the mouse position to a 3D ray and finds the closest point on the navigation mesh using `NavigationServer3D.map_get_closest_point_to_segment`:
+
+```gdscript
+# navmesh.gd
+func _unhandled_input(input_event: InputEvent) -> void:
+	if input_event is InputEventMouseButton \
+			and input_event.button_index == MOUSE_BUTTON_LEFT \
+			and input_event.pressed:
+
+		var mouse_cursor_position: Vector2 = input_event.position
+		var camera_ray_length := 1000.0
+		var camera_ray_start := _camera.project_ray_origin(mouse_cursor_position)
+		var camera_ray_end := camera_ray_start \
+			+ _camera.project_ray_normal(mouse_cursor_position) * camera_ray_length
+
+		var closest_point_on_navmesh := NavigationServer3D.map_get_closest_point_to_segment(
+			get_world_3d().navigation_map,
+			camera_ray_start,
+			camera_ray_end
+		)
+		_robot.set_target_position(closest_point_on_navmesh)
+```
+
+`map_get_closest_point_to_segment` takes a world-space line segment (the camera ray) and returns the nearest walkable point on any registered navigation region. This avoids sending the agent to a target position that is off the navmesh entirely.
+
+### Moving the agent
+
+The character script holds a `NavigationAgent3D` child node. Each physics frame it asks the agent for the next waypoint in the computed path and moves directly toward it:
+
+```gdscript
+# character.gd
+extends Marker3D
+
+@export var character_speed := 10.0
+@export var show_path: bool = true
+
+var _nav_path_line: Line3D
+
+@onready var _nav_agent := $NavigationAgent3D as NavigationAgent3D
+
+
+func _physics_process(delta: float) -> void:
+	if _nav_agent.is_navigation_finished():
+		return
+
+	var next_position := _nav_agent.get_next_path_position()
+	var offset := next_position - global_position
+	global_position = global_position.move_toward(next_position, delta * character_speed)
+
+	# Keep the character level — only rotate on the Y axis.
+	offset.y = 0
+	if not offset.is_zero_approx():
+		look_at(global_position + offset, Vector3.UP)
+
+
+func set_target_position(target_position: Vector3) -> void:
+	_nav_agent.set_target_position(target_position)
+	if show_path:
+		var start_position := global_transform.origin
+		var navigation_map := get_world_3d().get_navigation_map()
+		var path := NavigationServer3D.map_get_path(
+			navigation_map, start_position, target_position, true
+		)
+		_nav_path_line.draw_path(path)
+```
+
+`NavigationAgent3D.get_next_path_position()` returns the next intermediate point along the smoothed path, not the final target. The agent handles path recalculation and obstacle avoidance internally. `map_get_path` is called separately to retrieve the full path array for visualization.
+
+### Drawing the path
+
+The `Line3D` helper class wraps `ImmediateMesh` to render the path as a line strip in a single draw call:
+
+```gdscript
+# line3d.gd
+class_name Line3D
+extends MeshInstance3D
+
+
+func _ready() -> void:
+	mesh = ImmediateMesh.new()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	set_material_override(material)
+
+
+func draw_path(path: PackedVector3Array) -> void:
+	var im: ImmediateMesh = mesh
+	im.clear_surfaces()
+	im.surface_begin(Mesh.PRIMITIVE_POINTS, null)
+	im.surface_add_vertex(path[0])
+	im.surface_add_vertex(path[path.size() - 1])
+	im.surface_end()
+	im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, null)
+	for current_vector in path:
+		im.surface_add_vertex(current_vector)
+	im.surface_end()
+```
+
+The unshaded `StandardMaterial3D` ensures the path line is always fully visible regardless of scene lighting.
+
+---
+
+## navigation_mesh_chunks
+
+`navigation_mesh_chunks` (`3d/navigation_mesh_chunks/`) demonstrates how to bake navigation mesh in chunks and stream it at runtime. Rather than baking the entire level into a single `NavigationMesh`, the demo divides the scene into a grid of `NavigationRegion3D` nodes — one per chunk — which can be added, removed, or rebaked independently.
+
+### How chunks are created
+
+The scene geometry is parsed once into a `NavigationMeshSourceGeometryData3D` object. Each chunk is then baked from a spatial subset of that source data using `filter_baking_aabb`. A `border_size` equal to the chunk size is added during baking so that adjacent chunks share edge vertices and connect cleanly:
+
+```gdscript
+# navmesh_chhunks_demo_3d.gd (excerpt)
+func _ready() -> void:
+	NavigationServer3D.set_debug_enabled(true)
+	var map: RID = get_world_3d().navigation_map
+	NavigationServer3D.map_set_cell_size(map, map_cell_size)
+
+	# Edge connections are disabled — clean edge alignment handles merging instead.
+	NavigationServer3D.map_set_use_edge_connections(map, false)
+
+	var source_geometry := NavigationMeshSourceGeometryData3D.new()
+	var parse_settings := NavigationMesh.new()
+	parse_settings.geometry_parsed_geometry_type = \
+		NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+	NavigationServer3D.parse_source_geometry_data(
+		parse_settings, source_geometry, %ParseRootNode
+	)
+
+	create_region_chunks(%ChunksContainer, source_geometry, chunk_size * cell_size, agent_radius)
+
+
+static func create_region_chunks(
+	chunks_root_node: Node,
+	p_source_geometry: NavigationMeshSourceGeometryData3D,
+	p_chunk_size: float,
+	p_agent_radius: float
+) -> void:
+	var input_geometry_bounds: AABB = p_source_geometry.get_bounds()
+	var start_chunk: Vector3 = floor(input_geometry_bounds.position / p_chunk_size)
+	var end_chunk: Vector3 = floor(
+		(input_geometry_bounds.position + input_geometry_bounds.size) / p_chunk_size
+	)
+
+	for chunk_z in range(start_chunk.z, end_chunk.z + 1):
+		for chunk_x in range(start_chunk.x, end_chunk.x + 1):
+			var chunk_id := Vector3i(chunk_x, 0, chunk_z)
+			var chunk_bounding_box := AABB(
+				Vector3(chunk_x, start_chunk.y, chunk_z) * p_chunk_size,
+				Vector3(p_chunk_size, end_chunk.y + p_chunk_size, p_chunk_size)
+			)
+			var baking_bounds := chunk_bounding_box.grow(p_chunk_size)
+
+			var chunk_navmesh := NavigationMesh.new()
+			chunk_navmesh.geometry_parsed_geometry_type = \
+				NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+			chunk_navmesh.cell_size = cell_size
+			chunk_navmesh.cell_height = cell_size
+			chunk_navmesh.filter_baking_aabb = baking_bounds
+			chunk_navmesh.border_size = p_chunk_size
+			chunk_navmesh.agent_radius = p_agent_radius
+			NavigationServer3D.bake_from_source_geometry_data(chunk_navmesh, p_source_geometry)
+
+			# Snap vertices to suppress float precision artifacts at chunk boundaries.
+			var navmesh_vertices := chunk_navmesh.vertices
+			for i in navmesh_vertices.size():
+				navmesh_vertices[i] = navmesh_vertices[i].snappedf(map_cell_size * 0.1)
+			chunk_navmesh.vertices = navmesh_vertices
+
+			var chunk_region := NavigationRegion3D.new()
+			chunk_region.navigation_mesh = chunk_navmesh
+			chunks_root_node.add_child(chunk_region)
+			chunk_id_to_region[chunk_id] = chunk_region
+```
+
+After baking, vertex positions are snapped to a fraction of `map_cell_size` to eliminate floating-point gaps that would break edge merging between adjacent chunks.
+
+<Note>
+Edge connections are disabled via `map_set_use_edge_connections(map, false)` because the chunks share exact border vertices — edge connections are only needed when navmesh edges do not align perfectly. Disabling them saves CPU time on the navigation map synchronization pass.
+</Note>
+
+---
+
+## waypoints
+
+`waypoints` (`3d/waypoints/`) shows how to display 2D heads-up markers in a 3D scene. Each waypoint is a `Control` node that is a child of a `Node3D`. Every frame it unprojects the parent's world position to screen coordinates and clamps the result to the viewport edges when the target is off-screen or behind the camera.
+
+```gdscript
+# waypoint.gd (excerpt)
+func _process(_delta: float) -> void:
+	var parent_position: Vector3 = parent.global_transform.origin
+	var camera_transform := camera.global_transform
+
+	var is_behind := camera_transform.basis.z.dot(
+		parent_position - camera_transform.origin
+	) > 0
+
+	var distance := camera_transform.origin.distance_to(parent_position)
+	modulate.a = clamp(remap(distance, 0, 2, 0, 1), 0, 1)
+
+	var unprojected_position := camera.unproject_position(parent_position)
+
+	if not sticky:
+		position = unprojected_position
+		visible = not is_behind
+		return
+
+	# Clamp to viewport edges and rotate the arrow indicator.
+	position = Vector2(
+		clamp(unprojected_position.x, MARGIN, viewport_base_size.x - MARGIN),
+		clamp(unprojected_position.y, MARGIN, viewport_base_size.y - MARGIN)
+	)
+```
+
+When `sticky` is `true`, the waypoint stays at the viewport edge closest to the off-screen target and the arrow indicator rotates to point toward it. A dot product with `camera_transform.basis.z` detects whether the target is behind the camera, which `camera.is_position_behind()` would also handle but with an additional near-clip-plane check that is not desirable here.
+
+<Tip>
+The `modulate.a` fade-out based on distance prevents the waypoint from cluttering the screen when you walk right up to the marked object.
+</Tip>
+
+---
+
+## ik
+
+`ik` (`3d/ik/`) demonstrates three inverse kinematics approaches available in Godot:
+
+### SkeletonIK3D
+
+`skeleton_ik.tscn` uses the built-in `SkeletonIK3D` node. The runner script starts the solver immediately in `_ready()`:
+
+```gdscript
+# skeleton_ik_runner.gd
+extends SkeletonIK3D
+
+func _ready():
+	start(false)
+```
+
+`start(false)` begins the IK solver without overriding the skeleton's current pose. The target bone tracks a `Node3D` whose position is driven by `target_from_mousepos.gd`, which unprojects the mouse cursor onto a plane at the IK target's height.
+
+### FABRIK
+
+`fabrik_ik.tscn` uses the FABRIK (Forward And Backward Reaching Inverse Kinematics) algorithm provided by the `SkeletonModification3DFABRIK` resource inside a `SkeletonModificationStack3D`. FABRIK is well-suited for multi-bone chains such as arms or tentacles because it converges quickly and handles joint limits naturally.
+
+### LookAt IK
+
+`look_at_ik.tscn` uses `SkeletonModification3DLookAt` to rotate a single bone toward a target — a lightweight option for eye or head tracking that does not require a full IK chain.
+
+<Note>
+`SkeletonIK3D` is a standalone node that drives a single bone chain. `SkeletonModificationStack3D` with individual `SkeletonModification3D` resources is the more flexible system for combining multiple IK solvers on the same skeleton.
+</Note>
+
+---
+
+## NavigationServer3D reference
+
+All three navigation demos call into `NavigationServer3D` directly rather than relying solely on the high-level `NavigationAgent3D` API. Key methods used across the demos:
+
+| Method | Used in |
+|--------|---------|
+| `map_get_closest_point_to_segment(map, from, to)` | `navigation`, `navigation_mesh_chunks` |
+| `map_get_path(map, start, end, optimize)` | `navigation` |
+| `map_set_cell_size(map, size)` | `navigation_mesh_chunks` |
+| `map_set_use_edge_connections(map, enable)` | `navigation_mesh_chunks` |
+| `parse_source_geometry_data(mesh, geometry, root)` | `navigation_mesh_chunks` |
+| `bake_from_source_geometry_data(mesh, geometry)` | `navigation_mesh_chunks` |
+| `set_debug_enabled(enabled)` | `navigation_mesh_chunks` |
+
+`get_world_3d().navigation_map` returns the `RID` of the default navigation map for the current scene. Custom maps can be created with `NavigationServer3D.map_create()` and assigned to `NavigationRegion3D.navigation_map` for multi-map setups such as separate indoor and outdoor navigation layers.

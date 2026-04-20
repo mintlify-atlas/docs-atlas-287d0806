@@ -1,0 +1,204 @@
+---
+title: "Editor plugins: Building Godot editor extensions"
+description: "Write Godot editor plugins with four working examples: custom node types, main screen docks, custom Resource importers, and handling new file extensions."
+---
+
+Godot's editor is itself a Godot application, which means you can extend it using the same GDScript and scene system you use for your game. An editor plugin is a script that extends `EditorPlugin`, lives under `addons/<plugin_name>/`, and is declared in a `plugin.cfg` manifest. The plugins demo project bundles four complete plugins in a single project so you can see them all running side by side. Each plugin demonstrates a different extension surface: adding a node type to the scene tree, creating a full main-screen tab, defining a custom `Resource` with save/load/import support, and teaching the importer how to handle a new file extension.
+
+<Warning>
+  Due to [Godot issue #36713](https://github.com/godotengine/godot/issues/36713), you need to open this demo project once to import the assets, then close it and reopen it before the plugins become fully functional.
+</Warning>
+
+## The four plugins
+
+<CardGroup cols={2}>
+  <Card title="custom_node" icon="circle-nodes" href="#custom-node">
+    Registers a `Heart` node type derived from `Node2D` using `add_custom_type()`. The custom node appears in the **Create Node** dialog with its own icon.
+  </Card>
+  <Card title="main_screen" icon="window-maximize" href="#main-screen">
+    Adds a new main-screen tab alongside 2D, 3D, Script, and AssetLib. Demonstrates `_has_main_screen()`, `_make_visible()`, and `_handles()`.
+  </Card>
+  <Card title="material_creator" icon="palette" href="#material-creator">
+    Defines a custom `SillyMaterialResource` type with a dock UI, custom `ResourceFormatLoader`/`Saver`, and two `EditorImportPlugin` classes for importing `.sillymat` files.
+  </Card>
+  <Card title="simple_import_plugin" icon="file-import" href="#simple-import-plugin">
+    Handles a custom `.mtxt` file extension. Parses three comma-separated RGB values and imports them as a `StandardMaterial3D` resource.
+  </Card>
+</CardGroup>
+
+## Installing plugins into another project
+
+To reuse any of these plugins in your own project:
+
+<Steps>
+  <Step title="Copy the addon folder">
+    Copy the plugin folder (e.g. `addons/custom_node`) into the `addons/` directory of your target Godot project. If `addons/` does not exist, create it.
+
+    The final path should look like: `your_project/addons/custom_node/plugin.cfg`
+  </Step>
+  <Step title="Enable the plugin">
+    Open your project in Godot, go to **Project > Project Settings > Plugins**, and toggle the plugin **On**. Godot will call `_enter_tree()` on the plugin script.
+  </Step>
+  <Step title="Verify in the editor">
+    For `custom_node`, open the **Create Node** dialog and search for `Heart`. For `main_screen`, look for the new tab in the editor's top bar. For the importer plugins, drag a `.mtxt` or `.sillymat` file into the FileSystem dock and check the Import panel.
+  </Step>
+</Steps>
+
+<Tip>
+  To distribute a plugin as a ZIP archive that Godot can install from the editor UI, run:
+
+  ```bash
+  zip -r custom_node.zip custom_node/*
+  ```
+
+  from inside the `addons/` directory. The ZIP must contain the addon folder at its root, not nested inside another folder. Users can then install it via **AssetLib > Import** in the Godot editor.
+</Tip>
+
+## Custom node
+
+The `custom_node` plugin (`addons/custom_node/heart_plugin.gd`) calls `add_custom_type()` in `_enter_tree()` and `remove_custom_type()` in `_exit_tree()`. The first argument is the node name, the second is the base class it inherits from, the third is the preloaded script, and the fourth is the icon texture:
+
+```gdscript
+@tool
+extends EditorPlugin
+
+func _enter_tree() -> void:
+    var icon: Texture2D = preload("res://addons/custom_node/heart.png")
+    add_custom_type("Heart", "Node2D", preload("res://addons/custom_node/heart.gd"), icon)
+
+func _exit_tree() -> void:
+    remove_custom_type("Heart")
+```
+
+The `heart.gd` script attached to the type can contain any `Node2D` logic. Nodes created from this type appear as `Heart` in the scene tree and serialize their script path automatically.
+
+## Main screen
+
+The `main_screen` plugin (`addons/main_screen/main_screen_plugin.gd`) overrides four virtual methods to add a full editor tab:
+
+```gdscript
+@tool
+extends EditorPlugin
+
+const MainPanel = preload("res://addons/main_screen/main_panel.tscn")
+var main_panel_instance: CenterContainer
+
+func _enter_tree() -> void:
+    main_panel_instance = MainPanel.instantiate()
+    get_editor_interface().get_editor_main_screen().add_child(main_panel_instance)
+    _make_visible(false)
+
+func _exit_tree() -> void:
+    if main_panel_instance:
+        main_panel_instance.queue_free()
+
+func _has_main_screen() -> bool:
+    return true
+
+func _make_visible(visible: bool) -> void:
+    if main_panel_instance:
+        main_panel_instance.visible = visible
+
+func _handles(object: Object) -> bool:
+    return is_instance_of(object, preload("res://addons/main_screen/handled_by_main_screen.gd"))
+
+func _get_plugin_name() -> String:
+    return "Main Screen Plugin"
+
+func _get_plugin_icon() -> Texture2D:
+    return get_editor_interface().get_base_control().get_theme_icon(&"Node", &"EditorIcons")
+```
+
+`_has_main_screen()` tells the editor to show a tab button. `_handles()` controls which selected objects cause the editor to switch to your tab automatically. `_make_visible()` is called by the editor when the user clicks your tab or selects another.
+
+## Material creator
+
+The `material_creator` plugin is the most feature-complete example. It registers:
+
+- A custom dock panel in `DOCK_SLOT_LEFT_UL` for a material authoring UI.
+- A `ResourceFormatLoader` and `ResourceFormatSaver` pair so `.sillymat` files load and save through the normal `load()`/`ResourceSaver.save()` API.
+- Two `EditorImportPlugin` subclasses so you can import `.sillymat` files as either `SillyMaterialResource` or `StandardMaterial3D`.
+
+```gdscript
+@tool
+extends EditorPlugin
+
+var _material_creator_dock: Panel
+var _silly_mat_loader := SillyMatFormatLoader.new()
+var _silly_mat_saver := SillyMatFormatSaver.new()
+var _import_as_silly_mat_res := ImportSillyMatAsSillyMaterialResource.new()
+var _import_as_standard_mat := ImportSillyMatAsStandardMaterial3D.new()
+
+func _enter_tree() -> void:
+    ResourceLoader.add_resource_format_loader(_silly_mat_loader)
+    ResourceSaver.add_resource_format_saver(_silly_mat_saver)
+    add_import_plugin(_import_as_silly_mat_res)
+    add_import_plugin(_import_as_standard_mat)
+    const dock_scene: PackedScene = preload("res://addons/material_creator/editor/material_dock.tscn")
+    _material_creator_dock = dock_scene.instantiate()
+    add_control_to_dock(DOCK_SLOT_LEFT_UL, _material_creator_dock)
+
+func _exit_tree() -> void:
+    remove_control_from_docks(_material_creator_dock)
+    ResourceLoader.remove_resource_format_loader(_silly_mat_loader)
+    ResourceSaver.remove_resource_format_saver(_silly_mat_saver)
+    remove_import_plugin(_import_as_silly_mat_res)
+    remove_import_plugin(_import_as_standard_mat)
+```
+
+Always remove every loader, saver, and import plugin in `_exit_tree()`. Failing to do so leaves dangling handlers that can crash the editor or cause import errors after the plugin is disabled.
+
+## Simple import plugin
+
+The `simple_import_plugin` teaches the importer to handle `.mtxt` files. A `.mtxt` file contains a single line of three comma-separated integers representing an RGB colour. The import plugin reads the line, builds a `StandardMaterial3D`, and saves it as a `.res` file:
+
+```gdscript
+@tool
+extends EditorImportPlugin
+
+func _get_importer_name() -> String:
+    return "demos.mtxt"
+
+func _get_recognized_extensions() -> PackedStringArray:
+    return ["mtxt"]
+
+func _get_save_extension() -> String:
+    return "res"
+
+func _get_resource_type() -> String:
+    return "Material"
+
+func _import(source_file: String, save_path: String, options: Dictionary,
+        r_platform_variants: Array[String], r_gen_files: Array[String]) -> Error:
+    var file := FileAccess.open(source_file, FileAccess.READ)
+    var line := file.get_line()
+    var channels := line.split(",")
+    if channels.size() != 3:
+        return ERR_PARSE_ERROR
+
+    var color := Color8(int(channels[0]), int(channels[1]), int(channels[2]))
+    var material := StandardMaterial3D.new()
+    if options.use_red_anyway:
+        color = Color8(255, 0, 0)
+    material.albedo_color = color
+    return ResourceSaver.save(material, "%s.%s" % [save_path, _get_save_extension()])
+```
+
+The plugin entry point (`addons/simple_import_plugin/plugin.gd`) registers and unregisters this importer:
+
+```gdscript
+@tool
+extends EditorPlugin
+
+var import_plugin: EditorImportPlugin
+
+func _enter_tree() -> void:
+    import_plugin = preload("import.gd").new()
+    add_import_plugin(import_plugin)
+
+func _exit_tree() -> void:
+    remove_import_plugin(import_plugin)
+    import_plugin = null
+```
+
+Drop a `test.mtxt` file (e.g. containing `255,128,0`) into your project's FileSystem dock and the editor will automatically import it as an orange `StandardMaterial3D` resource.

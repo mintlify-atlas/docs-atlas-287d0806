@@ -1,0 +1,187 @@
+---
+title: "Networking: Multiplayer and WebSocket Demos"
+description: "Build multiplayer games and networked apps with Godot's eight networking demos covering ENet, WebSocket, and WebRTC transports with full GDScript examples."
+---
+
+Godot's networking layer provides a unified multiplayer API on top of multiple transports. You can use ENet for low-latency UDP game sessions, WebSocket for browser-compatible real-time communication, or WebRTC for peer-to-peer connections without a dedicated game server. The eight demos in this group cover all three transports, each written in GDScript and targeting the Compatibility renderer. WebRTC demos also require the WebRTC GDExtension plugin.
+
+## Demo overview
+
+<CardGroup cols={2}>
+  <Card title="Multiplayer Bomber" icon="bomb">
+    A Bomberman-style multiplayer game using `ENetMultiplayerPeer`. One player hosts; others join by IP address. Up to 12 players are supported.
+  </Card>
+  <Card title="Multiplayer Pong" icon="table-tennis-paddle-ball">
+    A minimal two-player Pong implementation using Godot's high-level multiplayer API, showing synchronized ball and paddle positions over ENet.
+  </Card>
+  <Card title="WebRTC Minimal" icon="circle-nodes">
+    The smallest possible WebRTC setup: two peers connect directly after manual offer/answer exchange, demonstrating `WebRTCPeerConnection` without a signaling server.
+  </Card>
+  <Card title="WebRTC Signaling" icon="server">
+    A full signaling server (available as GDScript or Node.js) and matching client that manage lobby assignment, peer discovery, and ICE candidate exchange for WebRTC sessions.
+  </Card>
+  <Card title="WebSocket Chat" icon="message-circle">
+    A chat application showing both sides of a WebSocket connection: a `WebSocketServer` that broadcasts messages and a `WebSocketClient` that sends and receives them.
+  </Card>
+  <Card title="WebSocket Minimal" icon="plug">
+    A bare-minimum WebSocket example showing how to open a connection, send a message, and handle the `message_received` signal.
+  </Card>
+  <Card title="WebSocket Multiplayer" icon="users">
+    Runs Godot's high-level multiplayer API (RPCs, synchronized properties) over a WebSocket transport instead of ENet, useful for browser-hosted games.
+  </Card>
+</CardGroup>
+
+<Note>
+All networking demos use GDScript and the Compatibility renderer. The WebRTC demos additionally require the [WebRTC GDExtension plugin](https://github.com/godotengine/webrtc-native/releases) extracted into the project folder to run on desktop platforms.
+</Note>
+
+## ENet multiplayer: hosting and joining
+
+The multiplayer bomber demo's `gamestate.gd` manages the connection lifecycle using `ENetMultiplayerPeer` and Godot's RPC system:
+
+```gdscript
+extends Node
+
+const DEFAULT_PORT = 10567
+const MAX_PEERS    = 12
+
+var peer: ENetMultiplayerPeer
+var players := {}
+signal player_list_changed()
+signal connection_succeeded()
+signal connection_failed()
+
+func _ready() -> void:
+    multiplayer.peer_connected.connect(_player_connected)
+    multiplayer.peer_disconnected.connect(_player_disconnected)
+    multiplayer.connected_to_server.connect(_connected_ok)
+    multiplayer.connection_failed.connect(_connected_fail)
+    multiplayer.server_disconnected.connect(_server_disconnected)
+
+func host_game(new_player_name: String) -> void:
+    peer = ENetMultiplayerPeer.new()
+    peer.create_server(DEFAULT_PORT, MAX_PEERS)
+    multiplayer.set_multiplayer_peer(peer)
+
+func join_game(ip: String, new_player_name: String) -> void:
+    peer = ENetMultiplayerPeer.new()
+    peer.create_client(ip, DEFAULT_PORT)
+    multiplayer.set_multiplayer_peer(peer)
+
+# Called on the server when a new peer connects.
+func _player_connected(id: int) -> void:
+    register_player.rpc_id(id, player_name)
+
+@rpc("any_peer")
+func register_player(new_player_name: String) -> void:
+    var id := multiplayer.get_remote_sender_id()
+    players[id] = new_player_name
+    player_list_changed.emit()
+
+@rpc("call_local")
+func load_world() -> void:
+    var world := load("res://world.tscn").instantiate()
+    get_tree().get_root().add_child(world)
+    get_tree().paused = false
+
+func begin_game() -> void:
+    assert(multiplayer.is_server())
+    load_world.rpc()
+```
+
+## WebSocket chat: server and client
+
+The WebSocket chat demo ships two scenes that can run in separate windows. The server listens on a configurable port; the client connects by URL.
+
+<Tabs>
+  <Tab title="Server">
+
+```gdscript
+extends Control
+
+@onready var _server: WebSocketServer = $WebSocketServer
+
+func _on_web_socket_server_client_connected(peer_id: int) -> void:
+    var peer: WebSocketPeer = _server.peers[peer_id]
+    info("Client %d connected. Protocol: %s" % [peer_id, peer.get_selected_protocol()])
+    _server.send(-peer_id, "[%d] connected" % peer_id)
+
+func _on_web_socket_server_client_disconnected(peer_id: int) -> void:
+    var peer: WebSocketPeer = _server.peers[peer_id]
+    info("Client %d disconnected. Code: %d, Reason: %s" % [
+        peer_id, peer.get_close_code(), peer.get_close_reason()
+    ])
+    _server.send(-peer_id, "[%d] disconnected" % peer_id)
+
+func _on_web_socket_server_message_received(peer_id: int, message: String) -> void:
+    info("Peer %d says: %s" % [peer_id, message])
+    # Broadcast to all peers except sender (negative peer_id = all except).
+    _server.send(-peer_id, "[%d] Says: %s" % [peer_id, message])
+
+func _on_listen_toggled(pressed: bool) -> void:
+    if not pressed:
+        _server.stop()
+        return
+    var port := int($Panel/VBoxContainer/Connect/Port.value)
+    _server.listen(port)
+```
+
+  </Tab>
+  <Tab title="Client">
+
+```gdscript
+extends Control
+
+@onready var _client: WebSocketClient = $WebSocketClient
+
+func _on_web_socket_client_connected_to_server() -> void:
+    info("Connected. Protocol: %s" % _client.get_socket().get_selected_protocol())
+
+func _on_web_socket_client_connection_closed() -> void:
+    var ws := _client.get_socket()
+    info("Disconnected. Code: %s, Reason: %s" % [ws.get_close_code(), ws.get_close_reason()])
+
+func _on_web_socket_client_message_received(message: String) -> void:
+    info(message)
+
+func _on_connect_toggled(pressed: bool) -> void:
+    if not pressed:
+        _client.close()
+        return
+    var host := $Panel/VBoxContainer/Connect/Host.text
+    var err := _client.connect_to_url(host)
+    if err != OK:
+        info("Error connecting to: %s" % host)
+
+func _on_send_pressed() -> void:
+    var text := $Panel/VBoxContainer/Send/LineEdit.text
+    if text.is_empty():
+        return
+    _client.send(text)
+    $Panel/VBoxContainer/Send/LineEdit.text = ""
+```
+
+  </Tab>
+</Tabs>
+
+## WebRTC signaling
+
+WebRTC requires peers to exchange session descriptions and ICE candidates through an out-of-band channel before a direct connection can open. The `webrtc_signaling` demo provides a ready-made signaling server in both GDScript (for game server deployment) and Node.js (for standalone match-making).
+
+<Warning>
+WebRTC peers cannot connect directly without a working signaling server. The `webrtc_minimal` demo bypasses this by requiring you to copy/paste the offer and answer strings manually, which is only practical for development testing.
+</Warning>
+
+The signaling protocol uses JSON messages with three fields:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `type` | int | Message type (JOIN, ID, PEER_CONNECT, OFFER, ANSWER, CANDIDATE, SEAL) |
+| `id` | int | Peer ID or `0` for the server |
+| `data` | string | Type-specific payload |
+
+After a lobby is sealed, the server disconnects all clients and destroys the lobby after 10 seconds.
+
+## Renderer and GDExtension notes
+
+All networking demos run on the Compatibility renderer. The three WebRTC-based demos (`webrtc_minimal`, `webrtc_signaling`, `websocket_multiplayer` when using WebRTC) additionally depend on the WebRTC GDExtension, because the built-in `WebRTCPeerConnection` class requires platform-native code that ships separately from the engine.

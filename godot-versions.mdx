@@ -1,0 +1,43 @@
+---
+title: "Godot versions: Which branch to use for your engine"
+description: "Match the godot-demo-projects branch to your installed Godot version — master for 4.x dev builds, 3.x for Godot 3, and named branches for stable releases."
+---
+
+The `godot-demo-projects` repository uses branches to track compatibility with different Godot Engine versions. Each demo relies on features and APIs that exist only in a specific version range, so it is important to check out the branch that matches the version of Godot you have installed. Using the wrong branch is the most common reason a demo fails to open or run correctly.
+
+## Branch reference
+
+| Branch | Compatible with |
+|--------|----------------|
+| `master` | Godot `master` development branch (next 4.x release) |
+| `3.x` | Godot `3.x` development branch (next 3.x release) |
+| `4.3`, `4.2`, `4.1`, … | The matching Godot stable release (e.g. `4.3` → Godot 4.3.x) |
+| `3.5`, `3.4`, `3.3`, … | The matching Godot 3.x stable release |
+| `2.1` | Godot 2.1.x |
+
+Other version branches follow the same pattern — the branch name matches the major.minor version of the stable Godot release it was written for.
+
+You can view the full list of available branches on GitHub:
+[github.com/godotengine/godot-demo-projects/branches](https://github.com/godotengine/godot-demo-projects/branches)
+
+## Checking out a specific branch
+
+Once you know which branch you need, switch to it with:
+
+```bash
+git checkout 4.3
+```
+
+Replace `4.3` with the branch name that matches your Godot version. If you downloaded a ZIP archive instead of cloning, return to the [releases or branches page](https://github.com/godotengine/godot-demo-projects/branches) on GitHub and download the ZIP for the correct branch using the branch selector dropdown before clicking **Code → Download ZIP**.
+
+<Tip>
+  If you have Godot 4 stable installed, check the Godot editor's **About** dialog (Help → About) to find your exact version number, then check out the matching branch (e.g. `4.3` for Godot 4.3.x). Only use the `master` branch if you are running a nightly or development build of Godot built from source.
+</Tip>
+
+## Why branches are kept separate
+
+Godot's scripting API changes between major and minor versions. Demos on the `master` branch may use nodes, methods, or project settings that do not exist in Godot 4.3 stable, and vice versa. Keeping one branch per release ensures every demo in that branch opens without errors and demonstrates current, idiomatic usage for that engine version.
+
+<Warning>
+  Do not mix demos from different branches. If you clone `master` but run them in Godot 4.3 stable, you may see errors about missing classes or deprecated APIs. Always match the branch to your Godot version.
+</Warning>

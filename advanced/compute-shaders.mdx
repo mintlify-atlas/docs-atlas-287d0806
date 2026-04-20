@@ -1,0 +1,244 @@
+---
+title: "Compute shaders: GPU compute via RenderingDevice"
+description: "Run GPU compute shaders in Godot 4 with RenderingDevice. Three demos cover heightmap generation, water ripple animation, and full-screen post-processing."
+---
+
+Godot 4 exposes a low-level GPU compute API through the `RenderingDevice` class. Unlike vertex and fragment shaders that plug into the rendering pipeline, compute shaders run arbitrary parallel workloads directly on the GPU — terrain generation, physics simulation, image processing — and feed their results back to GDScript or into the renderer. The three demos in the `compute/` folder demonstrate the most common patterns: generating a texture offline with a local `RenderingDevice`, animating a texture every frame on the render thread, and applying a full-screen post-processing effect through the `CompositorEffect` system.
+
+<Warning>
+  Compute shaders require the **Forward+** or **Mobile** renderer. The **Compatibility** renderer does not provide `RenderingDevice`. If you try to call `RenderingServer.create_local_rendering_device()` under Compatibility, it returns `null`. Switch the renderer in **Project Settings > Rendering > Renderer > Rendering Method**.
+</Warning>
+
+## The three compute demos
+
+<CardGroup cols={2}>
+  <Card title="heightmap" icon="mountain-sun" href="#heightmap">
+    Generates an island heightmap on the GPU using a noise-based compute shader. Includes a side-by-side CPU implementation for performance comparison.
+  </Card>
+  <Card title="texture" icon="droplet" href="#texture">
+    Animates a 512×512 water ripple effect every frame by running a compute shader on the render thread via `RenderingServer.call_on_render_thread`.
+  </Card>
+  <Card title="post_shader" icon="wand-magic-sparkles" href="#post-shader">
+    Applies a full-screen grayscale effect using a `CompositorEffect` subclass. The compute shader reads from and writes to the renderer's colour buffer each frame.
+  </Card>
+</CardGroup>
+
+## Core RenderingDevice workflow
+
+Every compute shader dispatch in Godot follows the same sequence regardless of which demo you look at:
+
+1. Get or create a `RenderingDevice` (either a local one for offline work, or the shared rendering device for frame-coupled effects).
+2. Load the `.glsl` file and compile it to SPIR-V with `shader_create_from_spirv`.
+3. Create texture or buffer resources and describe their usage with `RDTextureFormat` and `RDUniform`.
+4. Build a `uniform_set` that binds those resources to the shader's binding points.
+5. Create a `compute_pipeline` from the compiled shader.
+6. Begin a compute list, bind the pipeline and uniform set, dispatch workgroups, and end the list.
+7. Call `submit()` and `sync()` (local device) or rely on the frame pipeline (render thread).
+8. Read back results with `texture_get_data()` if needed, then free all RIDs when done.
+
+## Heightmap
+
+The `heightmap` demo generates a noise-based island texture by running both a GPU compute path and a CPU reference path so you can compare their execution times on your hardware.
+
+### GLSL shader
+
+The shader works with an 8×8 workgroup. Each invocation reads one pixel of the heightmap and one sample from a radial gradient, then multiplies them together to produce an island shape:
+
+```glsl
+#[compute]
+#version 460
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(r8, binding = 0) restrict uniform image2D heightmap;
+layout(rgba8, binding = 1) restrict readonly uniform image2D gradient;
+
+void main() {
+    ivec2 coords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dimensions = imageSize(heightmap);
+    ivec2 center = dimensions / 2;
+    int smallest_radius = min(center.x, center.y);
+
+    float dist = distance(coords, center);
+    int gradient_max_x = imageSize(gradient).x - 1;
+    int gradient_x = int(mix(0.0, float(gradient_max_x), dist / float(smallest_radius)));
+
+    vec4 gradient_color = imageLoad(gradient, ivec2(gradient_x, 0));
+    vec4 pixel = imageLoad(heightmap, coords);
+    pixel.r *= gradient_color.r;
+    pixel.r = step(0.2, pixel.r) * pixel.r;
+    imageStore(heightmap, coords, pixel);
+}
+```
+
+### GDScript dispatch
+
+The `init_gpu()` function in `main.gd` creates the device once and caches the pipeline for subsequent runs. Dispatching one workgroup per 8×8 pixel block:
+
+```gdscript
+func init_gpu() -> void:
+    rd = RenderingServer.create_local_rendering_device()
+    shader_rid = load_shader(rd, shader_file)
+
+    var heightmap_format := RDTextureFormat.new()
+    heightmap_format.format = RenderingDevice.DATA_FORMAT_R8_UNORM
+    heightmap_format.width = po2_dimensions
+    heightmap_format.height = po2_dimensions
+    heightmap_format.usage_bits = \
+        RenderingDevice.TEXTURE_USAGE_STORAGE_BIT + \
+        RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT + \
+        RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
+    heightmap_rid = rd.texture_create(heightmap_format, RDTextureView.new())
+
+    # ...gradient texture setup omitted for brevity...
+
+    uniform_set = rd.uniform_set_create([heightmap_uniform, gradient_uniform], shader_rid, 0)
+    pipeline = rd.compute_pipeline_create(shader_rid)
+
+func compute_island_gpu(heightmap: Image) -> void:
+    rd.texture_update(heightmap_rid, 0, heightmap.get_data())
+
+    var compute_list := rd.compute_list_begin()
+    rd.compute_list_bind_compute_pipeline(compute_list, pipeline)
+    rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
+    rd.compute_list_dispatch(compute_list, po2_dimensions / 8, po2_dimensions / 8, 1)
+    rd.compute_list_end()
+
+    rd.submit()
+    rd.sync()  # Wait for GPU to finish before reading back.
+
+    var output_bytes := rd.texture_get_data(heightmap_rid, 0)
+    var island_img := Image.create_from_data(
+        po2_dimensions, po2_dimensions, false, Image.FORMAT_L8, output_bytes)
+    display_island(island_img)
+```
+
+<Tip>
+  Avoid calling `rd.sync()` immediately after `rd.submit()` in a real game. Insert a few frames of delay so the GPU and CPU can run in parallel. Sync only when you actually need the result data.
+</Tip>
+
+Loading and compiling a `.glsl` shader file follows a consistent pattern used in every demo:
+
+```gdscript
+func load_shader(p_rd: RenderingDevice, path: String) -> RID:
+    var shader_file_data: RDShaderFile = load(path)
+    var shader_spirv: RDShaderSPIRV = shader_file_data.get_spirv()
+    return p_rd.shader_create_from_spirv(shader_spirv)
+```
+
+### Cleanup
+
+All `RID` resources must be freed when the node is destroyed. The demo hooks into `NOTIFICATION_PREDELETE` to guarantee cleanup even if the scene exits unexpectedly:
+
+```gdscript
+func cleanup_gpu() -> void:
+    rd.free_rid(pipeline)
+    rd.free_rid(uniform_set)
+    rd.free_rid(gradient_rid)
+    rd.free_rid(heightmap_rid)
+    rd.free_rid(shader_rid)
+    rd.free()
+    rd = null
+```
+
+## Texture
+
+The `texture` demo animates a water-ripple effect on a 3D plane by running a compute shader every frame on the render thread. It uses three ping-pong textures: one for the current frame output, one for the previous frame, and one for the frame before that. The wave simulation reads from the two history textures and writes the next state.
+
+The key pattern is `RenderingServer.call_on_render_thread()`, which schedules a callable to run on the render thread before the frame is composited. This is necessary because the main thread rendering device is only safe to access from the render thread:
+
+```gdscript
+func _process(delta: float) -> void:
+    next_texture = (next_texture + 1) % 3
+    if texture:
+        texture.texture_rd_rid = texture_rds[next_texture]
+    RenderingServer.call_on_render_thread(
+        _render_process.bind(next_texture, add_wave_point, texture_size, damp))
+```
+
+The `Texture2DRD` type bridges the compute output back into the material system: you set its `texture_rd_rid` to the RID of the texture you just wrote, and any `ShaderMaterial` using that `Texture2DRD` will automatically display the latest frame.
+
+## Post-shader
+
+The `post_shader` demo implements a grayscale screen-space effect using a `CompositorEffect` subclass (`PostProcessGrayScale`). Godot calls `_render_callback()` once per frame on the render thread. You receive a `RenderData` object, pull the colour buffer from `render_scene_buffers.get_color_layer(view)`, and dispatch your shader over it:
+
+```glsl
+#[compute]
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
+
+layout(push_constant, std430) uniform Params {
+    vec2 raster_size;
+    vec2 reserved;
+} params;
+
+void main() {
+    ivec2 uv = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(params.raster_size);
+
+    if (uv.x >= size.x || uv.y >= size.y) {
+        return;
+    }
+
+    vec4 color = imageLoad(color_image, uv);
+    float gray = color.r * 0.2125 + color.g * 0.7154 + color.b * 0.0721;
+    color.rgb = vec3(gray);
+    imageStore(color_image, uv, color);
+}
+```
+
+The GDScript side compiles the shader once in `_initialize_compute()` and dispatches it every frame in `_render_callback()`:
+
+```gdscript
+@tool
+class_name PostProcessGrayScale
+extends CompositorEffect
+
+var rd: RenderingDevice
+var shader: RID
+var pipeline: RID
+
+func _init() -> void:
+    effect_callback_type = EFFECT_CALLBACK_TYPE_POST_TRANSPARENT
+    rd = RenderingServer.get_rendering_device()
+    RenderingServer.call_on_render_thread(_initialize_compute)
+
+func _render_callback(p_effect_callback_type: EffectCallbackType, p_render_data: RenderData) -> void:
+    if rd and p_effect_callback_type == EFFECT_CALLBACK_TYPE_POST_TRANSPARENT and pipeline.is_valid():
+        var render_scene_buffers := p_render_data.get_render_scene_buffers()
+        if render_scene_buffers:
+            var size: Vector2i = render_scene_buffers.get_internal_size()
+            if size.x == 0 and size.y == 0:
+                return
+
+            var x_groups := (size.x - 1) / 8 + 1
+            var y_groups := (size.y - 1) / 8 + 1
+
+            var push_constant := PackedFloat32Array([size.x, size.y, 0.0, 0.0])
+
+            var view_count: int = render_scene_buffers.get_view_count()
+            for view in view_count:
+                var input_image: RID = render_scene_buffers.get_color_layer(view)
+                var uniform := RDUniform.new()
+                uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+                uniform.binding = 0
+                uniform.add_id(input_image)
+                var uniform_set := UniformSetCacheRD.get_cache(shader, 0, [uniform])
+
+                var compute_list := rd.compute_list_begin()
+                rd.compute_list_bind_compute_pipeline(compute_list, pipeline)
+                rd.compute_list_bind_uniform_set(compute_list, uniform_set, 0)
+                rd.compute_list_set_push_constant(
+                    compute_list, push_constant.to_byte_array(), push_constant.size() * 4)
+                rd.compute_list_dispatch(compute_list, x_groups, y_groups, 1)
+                rd.compute_list_end()
+```
+
+To use a `CompositorEffect` in your scene, add a `Compositor` resource to your `WorldEnvironment` node, then add your `PostProcessGrayScale` resource to its `compositor_effects` array. The `post_shader/main.gd` script toggles effects at runtime using `compositor.compositor_effects[0].enabled`.
+
+<Note>
+  Push constants must be aligned to 16 bytes. The grayscale shader uses `vec2 raster_size` followed by `vec2 reserved` to pad to 16 bytes. Match the exact layout in both your GLSL struct and the `PackedFloat32Array` you build in GDScript.
+</Note>

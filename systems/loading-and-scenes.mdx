@@ -1,0 +1,188 @@
+---
+title: "Loading and Scenes: Data Management Demos in Godot"
+description: "Master scene transitions, threaded resource loading, save/load systems, autoloads, serialization, and threading with Godot's seven loading demos."
+---
+
+Godot separates scene loading, data persistence, and background work into distinct APIs that compose cleanly. The seven demos in this group cover every pattern you are likely to need: global singletons via autoloads, non-blocking background loading with `ResourceLoader`, saving and restoring game state, switching scenes at runtime, serializing data to JSON and ConfigFile, and running work on background threads. All demos are written in GDScript; the threaded loading demo targets the Mobile renderer while the rest use Compatibility.
+
+## Demo overview
+
+<CardGroup cols={2}>
+  <Card title="Autoload" icon="globe">
+    Registers a `global.gd` Node as an autoload singleton and uses it to change scenes safely—deferring the scene swap so no code from the outgoing scene is still on the call stack.
+  </Card>
+  <Card title="Threaded loading" icon="spinner">
+    Calls `ResourceLoader.load_threaded_request()` to start background image loads, then retrieves results on demand with `load_threaded_get()`. Uses the Mobile renderer.
+  </Card>
+  <Card title="Runtime save/load" icon="hard-drive">
+    Opens images, audio, 3D scenes (GLTF/FBX), fonts, and ZIP archives from the local filesystem at runtime—without the Godot import pipeline—and re-exports them.
+  </Card>
+  <Card title="Scene changer" icon="arrow-right">
+    Demonstrates `SceneTree.change_scene_to_file()` and `change_scene_to_packed()` for straightforward scene transitions with optional loading screens.
+  </Card>
+  <Card title="Serialization" icon="file-json">
+    Saves and loads player position, health, and enemy state using both JSON (`FileAccess` + `JSON.stringify`) and ConfigFile. Compares their trade-offs side by side.
+  </Card>
+  <Card title="Threads" icon="cpu">
+    Creates `Thread` objects in GDScript to run expensive computations off the main thread, then marshals results back safely using `call_deferred()`.
+  </Card>
+</CardGroup>
+
+<Note>
+The threaded loading demo uses the Mobile renderer. All other loading demos use Compatibility.
+</Note>
+
+## Autoload: safe scene switching
+
+The autoload demo registers `global.gd` as an autoload so any scene can call `Global.goto_scene()`. The key technique is deferring the actual scene swap to avoid freeing the current scene while code from that scene is still executing:
+
+```gdscript
+# global.gd  (registered as autoload named "Global")
+extends Node
+
+func goto_scene(path: String) -> void:
+    # Defer the swap so the current scene can finish any ongoing callbacks.
+    _deferred_goto_scene.call_deferred(path)
+
+func _deferred_goto_scene(path: String) -> void:
+    # Safe to free here—the deferred call guarantees no scene code is on the stack.
+    get_tree().current_scene.free()
+
+    var packed_scene: PackedScene = ResourceLoader.load(path)
+    var instanced_scene := packed_scene.instantiate()
+
+    get_tree().root.add_child(instanced_scene)
+    # Must set current_scene AFTER adding to the tree.
+    get_tree().current_scene = instanced_scene
+```
+
+## Threaded loading
+
+`ResourceLoader.load_threaded_request()` starts a background load and returns immediately. You call `load_threaded_get()` when you actually need the resource—either blocking until complete or checking progress first with `load_threaded_get_status()`.
+
+```gdscript
+extends VBoxContainer
+
+func _on_start_loading_pressed() -> void:
+    # Issue all requests at once; they load in parallel on background threads.
+    ResourceLoader.load_threaded_request("res://paintings/painting_babel.jpg")
+    ResourceLoader.load_threaded_request("res://paintings/painting_las_meninas.png")
+    ResourceLoader.load_threaded_request("res://paintings/painting_mona_lisa.jpg")
+    ResourceLoader.load_threaded_request("res://paintings/painting_old_guitarist.jpg")
+    ResourceLoader.load_threaded_request("res://paintings/painting_parasol.jpg")
+    ResourceLoader.load_threaded_request("res://paintings/painting_the_swing.jpg")
+
+    # Enable the "get loaded" buttons so the user can retrieve each painting.
+    for btn: Button in $GetLoaded.get_children():
+        btn.disabled = false
+
+func _on_babel_pressed() -> void:
+    # Blocks until the background load finishes (usually already done by now).
+    $Paintings/Babel.texture = ResourceLoader.load_threaded_get(
+        "res://paintings/painting_babel.jpg"
+    )
+    $GetLoaded/Babel.disabled = true
+```
+
+## JSON serialization
+
+The serialization demo saves player position, health, rotation, and all active enemy positions to a JSON file. Because JSON does not natively support Godot types such as `Vector2`, the demo converts them with `var_to_str()` before writing and `str_to_var()` after reading.
+
+```gdscript
+extends Button
+
+const SAVE_PATH = "user://save_json.json"
+
+func save_game() -> void:
+    var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+    var player := get_node(player_node)
+
+    var save_dict := {
+        player = {
+            # var_to_str converts Vector2/Vector3/etc. to a portable string.
+            position = var_to_str(player.position),
+            health   = var_to_str(player.health),
+            rotation = var_to_str(player.sprite.rotation),
+        },
+        enemies = [],
+    }
+
+    for enemy in get_tree().get_nodes_in_group(&"enemy"):
+        save_dict.enemies.push_back({ position = var_to_str(enemy.position) })
+
+    file.store_line(JSON.stringify(save_dict))
+
+func load_game() -> void:
+    var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
+    var json := JSON.new()
+    json.parse(file.get_line())
+    var save_dict := json.get_data() as Dictionary
+
+    var player := get_node(player_node) as Player
+    player.position = str_to_var(save_dict.player.position)
+    player.health   = str_to_var(save_dict.player.health)
+    player.sprite.rotation = str_to_var(save_dict.player.rotation)
+
+    # Clear existing enemies before spawning saved ones.
+    get_tree().call_group(&"enemy", &"queue_free")
+
+    var game := get_node(game_node)
+    for enemy_config: Dictionary in save_dict.enemies:
+        var enemy: Enemy = preload("res://enemy.tscn").instantiate()
+        enemy.position = str_to_var(enemy_config.position)
+        game.add_child(enemy)
+```
+
+## Runtime file loading
+
+The `runtime_save_load` demo opens arbitrary files from disk at runtime—bypassing the Godot import pipeline entirely—and displays or re-exports them. It supports images (PNG, JPEG, WebP, SVG), audio (OGG, MP3, WAV), 3D scenes (GLTF, GLB, FBX), fonts (TTF, OTF, WOFF2), ZIP archives, and plain text.
+
+<AccordionGroup>
+  <Accordion title="Loading images">
+
+```gdscript
+var image := Image.load_from_file(path)
+texture_viewer.texture = ImageTexture.create_from_image(image)
+```
+
+  </Accordion>
+  <Accordion title="Loading audio">
+
+```gdscript
+if path.ends_with(".ogg"):
+    audio_stream_player.stream = AudioStreamOggVorbis.load_from_file(path)
+elif path.ends_with(".mp3"):
+    audio_stream_player.stream = AudioStreamMP3.load_from_file(path)
+elif path.ends_with(".wav"):
+    audio_stream_player.stream = AudioStreamWAV.load_from_file(path)
+```
+
+  </Accordion>
+  <Accordion title="Loading 3D scenes (GLTF)">
+
+```gdscript
+var gltf_document := GLTFDocument.new()
+var gltf_state   := GLTFState.new()
+var error := gltf_document.append_from_file(path, gltf_state)
+if error == OK:
+    var root_node := gltf_document.generate_scene(gltf_state)
+    scene_viewer.add_child(root_node)
+```
+
+  </Accordion>
+  <Accordion title="Re-exporting to GLTF">
+
+```gdscript
+# The file extension (.gltf vs .glb) selects text vs binary format.
+var gltf_document := GLTFDocument.new()
+var gltf_state   := GLTFState.new()
+gltf_document.append_from_scene(scene_viewer_root_node, gltf_state)
+gltf_document.write_to_filesystem(gltf_state, output_path)
+```
+
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+Use `ProjectSettings.load_resource_pack()` to mount PCK or ZIP files exported by Godot as additional data packs (DLCs). This approach provides a virtual filesystem so your code can reference the added files with `res://` paths as if they were always present.
+</Note>

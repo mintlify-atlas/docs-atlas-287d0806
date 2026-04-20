@@ -1,0 +1,244 @@
+---
+title: "Audio System: Playback, Effects, and MIDI in Godot"
+description: "Explore Godot's audio system through ten hands-on demos covering playback, effects, MIDI, spectrum analysis, procedural generation, BPM sync, and more."
+---
+
+Godot's audio system gives you precise control over playback, signal routing through named buses, and real-time effect processing. The ten demos in this group walk you through each major capability—from toggling reverb and distortion on live audio, to generating sine waves in GDScript, to building a full rhythm game with latency-compensated beat detection. Every demo is written in GDScript and targets the Compatibility renderer.
+
+## Demo overview
+
+<CardGroup cols={2}>
+  <Card title="Audio Effects" icon="sliders">
+    Toggle reverb, distortion, chorus, and other built-in effects on sound effects and background music at runtime. See [audio buses](https://docs.godotengine.org/en/stable/tutorials/audio/audio_buses.html) for the underlying API.
+  </Card>
+  <Card title="BPM Sync" icon="music">
+    Synchronize visual events to a song's beat using either the system clock or the sound clock. Compares `AudioServer.get_time_since_last_mix()` with `Time.get_ticks_usec()`.
+  </Card>
+  <Card title="Device Changer" icon="headphones">
+    Switch the active audio output device at runtime using `AudioServer.set_device()` and `AudioServer.get_device_list()`.
+  </Card>
+  <Card title="Generator" icon="wave-square">
+    Push raw PCM frames into an `AudioStreamGeneratorPlayback` to produce a 440 Hz sine wave—or any frequency—entirely from GDScript.
+  </Card>
+  <Card title="Mic Record" icon="microphone">
+    Record audio from the microphone, then play it back or save it to disk. Demonstrates configuring format, mix rate, and stereo settings.
+  </Card>
+  <Card title="MIDI Piano" icon="keyboard">
+    Drive an 88-key on-screen piano using `InputEventMIDI` events from a connected MIDI controller (tested with the Yamaha MX88). Keys are also clickable with the mouse.
+  </Card>
+  <Card title="Rhythm Game" icon="clock">
+    A complete rhythm game using latency-compensated beat detection, the 1€ filter for jitter smoothing, and BPM-aligned note charts stored as plain arrays.
+  </Card>
+  <Card title="Spectrum" icon="chart-bar">
+    Visualize the frequency spectrum of a playing track in real time using `AudioEffectSpectrumAnalyzerInstance`.
+  </Card>
+  <Card title="Text-to-Speech" icon="comment">
+    Enumerate OS voices and send text utterances using `DisplayServer.tts_speak()`. Demonstrates voice selection and callback signals.
+  </Card>
+</CardGroup>
+
+## AudioStreamPlayer variants
+
+Godot offers three player nodes; picking the right one determines how the audio behaves spatially:
+
+| Node | Panning | Use when |
+|------|---------|----------|
+| `AudioStreamPlayer` | None (full stereo) | UI sounds, music, or global effects |
+| `AudioStreamPlayer2D` | Auto-panned by 2D position | Sounds emitted from 2D objects |
+| `AudioStreamPlayer3D` | Spatialized by 3D position and attenuation | Sounds emitted from 3D objects |
+
+All three share the same `stream`, `volume_db`, `bus`, and `play()` / `stop()` API, so you can swap between them without rewriting your signal connections.
+
+## Rhythm game: beat detection
+
+The rhythm game uses a `Conductor` class that blends audio-thread time with system-thread time to produce a stable, low-jitter beat position. It applies the [1€ filter](https://gery.casiez.net/1euro/) to the delta between both clocks rather than to the time itself.
+
+```gdscript
+## Accurately tracks the current beat of a song.
+class_name Conductor
+extends Node
+
+@export var player: AudioStreamPlayer
+@export var bpm: float = 100
+@export var first_beat_offset_ms: int = 0
+@export var allowed_jitter: float = 0.1
+@export var lag_reduction: float = 5
+
+var _cached_output_latency: float = AudioServer.get_output_latency()
+var _filter: OneEuroFilter
+var _song_time_audio: float = -100
+var _song_time_system: float = -100
+var _song_time_begin: float = 0
+var _filtered_audio_system_delta: float = 0
+
+func _process(_delta: float) -> void:
+    var last_mix := AudioServer.get_time_since_last_mix()
+    # Guard against a web platform bug where this returns UINT64_MAX.
+    if last_mix > 1000:
+        last_mix = 0
+
+    _song_time_audio = (
+        player.get_playback_position()
+        - first_beat_offset_ms / 1000.0
+        + last_mix
+        - _cached_output_latency
+    )
+
+    _song_time_system = (Time.get_ticks_usec() / 1000000.0) - _song_time_begin
+    _song_time_system *= player.pitch_scale
+
+func _physics_process(delta: float) -> void:
+    var audio_system_delta := _song_time_audio - _song_time_system
+    _filtered_audio_system_delta = _filter.filter(audio_system_delta, delta)
+
+## Returns the current beat of the song (float, supports fractional beats).
+func get_current_beat() -> float:
+    var song_time := _song_time_system + _filtered_audio_system_delta
+    return song_time / get_beat_duration()
+
+func get_beat_duration() -> float:
+    return 60 / bpm
+```
+
+## MIDI piano: handling InputEventMIDI
+
+The MIDI piano demo opens MIDI input at startup and routes `InputEventMIDI` events to the matching key scene.
+
+```gdscript
+extends Control
+
+const START_KEY = 21  # Lowest key on an 88-key piano
+const END_KEY   = 108  # Highest key
+
+var piano_key_dict := Dictionary()
+
+func _ready() -> void:
+    for i in range(START_KEY, END_KEY + 1):
+        piano_key_dict[i] = _create_piano_key(i)
+    OS.open_midi_inputs()
+    if not OS.get_connected_midi_inputs().is_empty():
+        print(OS.get_connected_midi_inputs())
+
+func _input(input_event: InputEvent) -> void:
+    if input_event is not InputEventMIDI:
+        return
+    var midi_event: InputEventMIDI = input_event
+    if midi_event.pitch < START_KEY or midi_event.pitch > END_KEY:
+        return
+    var key: PianoKey = piano_key_dict[midi_event.pitch]
+    if midi_event.message == MIDI_MESSAGE_NOTE_ON:
+        key.activate()
+    else:
+        key.deactivate()
+```
+
+<Note>
+MIDI output is not yet supported in Godot. Only MIDI input works via `InputEventMIDI`.
+</Note>
+
+## Procedural audio generation
+
+The generator demo uses `AudioStreamGeneratorPlayback.push_frame()` to fill the audio buffer every frame from GDScript:
+
+```gdscript
+extends Node
+
+var sample_hz := 22050.0
+var pulse_hz  := 440.0
+var phase     := 0.0
+var playback: AudioStreamPlayback
+
+func _fill_buffer() -> void:
+    var increment := pulse_hz / sample_hz
+    var to_fill: int = playback.get_frames_available()
+    while to_fill > 0:
+        # Audio frames are stereo (Vector2).
+        playback.push_frame(Vector2.ONE * sin(phase * TAU))
+        phase = fmod(phase + increment, 1.0)
+        to_fill -= 1
+
+func _ready() -> void:
+    # mix_rate must be set before play().
+    $Player.stream.mix_rate = sample_hz
+    $Player.play()
+    playback = $Player.get_stream_playback()
+    _fill_buffer()
+
+func _process(_delta: float) -> void:
+    _fill_buffer()
+```
+
+## BPM synchronization
+
+The BPM sync demo shows two strategies for timing visual events to the beat.
+
+<Tabs>
+  <Tab title="Sound clock">
+
+```gdscript
+# Uses AudioServer's playback position plus latency compensation.
+const COMPENSATE_FRAMES = 2
+const COMPENSATE_HZ = 60.0
+
+func _process(_delta: float) -> void:
+    var time := (
+        $Player.get_playback_position()
+        + AudioServer.get_time_since_last_mix()
+        - AudioServer.get_output_latency()
+        + (1 / COMPENSATE_HZ) * COMPENSATE_FRAMES
+    )
+    var beat := int(time * BPM / 60.0)
+```
+
+  </Tab>
+  <Tab title="System clock">
+
+```gdscript
+# Uses Time.get_ticks_usec() with an initial delay offset.
+var time_begin: float
+var time_delay: float
+
+func _on_play_pressed() -> void:
+    time_begin = Time.get_ticks_usec()
+    time_delay = AudioServer.get_time_to_next_mix() + AudioServer.get_output_latency()
+    $Player.play()
+
+func _process(_delta: float) -> void:
+    var time := (Time.get_ticks_usec() - time_begin) / 1000000.0
+    time -= time_delay
+    var beat := int(time * BPM / 60.0)
+```
+
+  </Tab>
+</Tabs>
+
+<Tip>
+Use `AudioEffectSpectrumAnalyzerInstance.get_magnitude_for_frequency_range()` to drive a spectrum visualizer. Retrieve the instance with `AudioServer.get_bus_effect_instance(bus_index, effect_index)` after adding an `AudioEffectSpectrumAnalyzer` to your bus in the AudioServer panel.
+</Tip>
+
+## Spectrum visualization
+
+```gdscript
+extends Node2D
+
+const VU_COUNT   = 16
+const FREQ_MAX   = 11050.0
+const HEIGHT     = 250
+const HEIGHT_SCALE = 8.0
+const MIN_DB     = 60
+
+var spectrum: AudioEffectSpectrumAnalyzerInstance
+
+func _ready() -> void:
+    # Bus 0, effect 0 must be an AudioEffectSpectrumAnalyzer.
+    spectrum = AudioServer.get_bus_effect_instance(0, 0)
+
+func _process(_delta: float) -> void:
+    var prev_hz := 0.0
+    for i in range(1, VU_COUNT + 1):
+        var hz := i * FREQ_MAX / VU_COUNT
+        var magnitude := spectrum.get_magnitude_for_frequency_range(prev_hz, hz).length()
+        var energy := clampf((MIN_DB + linear_to_db(magnitude)) / MIN_DB, 0, 1)
+        prev_hz = hz
+    queue_redraw()
+```

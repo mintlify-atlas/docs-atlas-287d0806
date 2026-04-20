@@ -1,0 +1,261 @@
+---
+title: "2D Physics & Navigation Demos in Godot 4"
+description: "Explore 2D physics testing, finite state machines, NavigationAgent2D pathfinding, AStarGrid2D, chunked navigation meshes, and hexagonal TileMap movement."
+---
+
+Godot's 2D physics system gives you three body types — `StaticBody2D`, `CharacterBody2D`, and `RigidBody2D` — as well as a built-in navigation stack that handles polygon-based walkable regions, A\* grid pathfinding, and large-world chunked meshes. The demos in this group let you study each system in isolation, from low-level collision shape tests all the way to a full hierarchical state machine driving character AI.
+
+## physics_tests — collision shapes and physics layer verification
+
+`physics_tests` is a structured test suite rather than a game. It contains functional tests that verify collision shapes, physics layers, and body interactions, as well as performance tests that let you measure how the physics engine scales with body count. Use it to catch regressions when upgrading Godot versions or when writing custom physics queries.
+
+**Renderer: Mobile.**
+
+Each test is a self-contained scene under `tests/`. The `tests_menu.gd` script populates an `OptionButton` at runtime by scanning for test scenes, so adding a new test is as simple as dropping a new scene file into the `tests/` folder.
+
+<Tip>
+  Run `physics_tests` before and after any Godot engine update that touches the physics server. A failing test here pinpoints the regression immediately.
+</Tip>
+
+---
+
+## finite_state_machine — hierarchical FSM and pushdown automaton
+
+The `finite_state_machine` demo implements the State Machine design pattern in GDScript with two layers of abstraction: a generic `StateMachine` base (in `state_machine/`) and a player-specific `PlayerStateMachine` built on top of it. States are `Node` children of the machine, which makes the scene tree itself a visual representation of what the player can do.
+
+**Why use a state machine?**
+
+- Separates each behaviour and its transitions into dedicated objects, keeping individual scripts short.
+- Enforces the Single Responsibility Principle — each `State` node represents exactly one action.
+- Makes the player's capabilities visible in the FileSystem dock without reading any code.
+
+### Base State interface
+
+Every state implements the same four methods. The machine calls them at the right moment; individual states override only the ones they need:
+
+```gdscript
+extends Node
+# Base interface for all states.
+
+signal finished(next_state_name: StringName)
+
+func enter() -> void:
+    pass  # Initialize: play animation, reset timers, etc.
+
+func exit() -> void:
+    pass  # Clean up before transitioning away.
+
+func handle_input(_input_event: InputEvent) -> void:
+    pass
+
+func update(_delta: float) -> void:
+    pass
+
+func _on_animation_finished(_anim_name: String) -> void:
+    pass
+```
+
+### State machine controller
+
+The `StateMachine` node connects all child states' `finished` signals to `_change_state()` when the tree is entered. Transitioning to the special name `"previous"` pops the stack — implementing the pushdown automaton pattern used for menus and sub-states:
+
+```gdscript
+extends Node
+
+signal state_changed(current_state: Node)
+
+@export var start_state: NodePath
+var states_map := {}
+var states_stack := []
+var current_state: Node = null
+
+func _enter_tree() -> void:
+    if start_state.is_empty():
+        start_state = get_child(0).get_path()
+    for child in get_children():
+        child.finished.connect(_change_state)
+    initialize(start_state)
+
+func initialize(initial_state: NodePath) -> void:
+    states_stack.push_front(get_node(initial_state))
+    current_state = states_stack[0]
+    current_state.enter()
+
+func _physics_process(delta: float) -> void:
+    current_state.update(delta)
+
+func _unhandled_input(input_event: InputEvent) -> void:
+    current_state.handle_input(input_event)
+
+func _change_state(state_name: String) -> void:
+    current_state.exit()
+    if state_name == "previous":
+        states_stack.pop_front()
+    else:
+        states_stack[0] = states_map[state_name]
+    current_state = states_stack[0]
+    state_changed.emit(current_state)
+    if state_name != "previous":
+        current_state.enter()
+```
+
+To add a new state, create a script that extends `State`, attach it as a child of the `PlayerStateMachine` node, and emit `finished.emit("target_state_name")` when the transition condition is met.
+
+---
+
+## navigation — NavigationRegion2D and NavigationAgent2D
+
+The `navigation` demo shows polygon-based 2D pathfinding: a `NavigationRegion2D` defines the walkable area using a `NavigationPolygon` resource, and a `NavigationAgent2D` on the character computes a path to wherever you click.
+
+```gdscript
+extends CharacterBody2D
+
+var movement_speed := 200.0
+
+@onready var navigation_agent: NavigationAgent2D = $NavigationAgent2D
+
+func _ready() -> void:
+    navigation_agent.path_desired_distance = 2.0
+    navigation_agent.target_desired_distance = 2.0
+    navigation_agent.debug_enabled = true
+
+func _unhandled_input(input_event: InputEvent) -> void:
+    if not input_event.is_action_pressed(&"click"):
+        return
+    set_movement_target(get_global_mouse_position())
+
+func set_movement_target(movement_target: Vector2) -> void:
+    navigation_agent.target_position = movement_target
+
+func _physics_process(_delta: float) -> void:
+    if navigation_agent.is_navigation_finished():
+        return
+    var next_pos: Vector2 = navigation_agent.get_next_path_position()
+    velocity = global_position.direction_to(next_pos) * movement_speed
+    move_and_slide()
+```
+
+**Key concepts:**
+- `path_desired_distance` — how close the agent must get to each waypoint before advancing.
+- `target_desired_distance` — how close counts as "arrived" at the final target.
+- `debug_enabled = true` — draws the computed path in the editor and at runtime.
+- `get_next_path_position()` returns the world-space position of the next waypoint; steering toward it with `direction_to()` produces smooth movement.
+
+<Note>
+  `NavigationAgent2D` requires a `NavigationRegion2D` in the scene (or a navigation map set via `NavigationServer2D`) before it can compute paths. The navigation polygon must be baked after any geometry changes.
+</Note>
+
+---
+
+## navigation_astar — AStarGrid2D with steering behaviors
+
+`navigation_astar` replaces the polygon-based navigation stack with `AStarGrid2D`, Godot's built-in A\* implementation for uniform grids. It also adds steering behaviors to smooth the character's movement between discrete grid waypoints.
+
+### Setting up the grid
+
+The `pathfind_astar.gd` script extends `TileMapLayer` and builds the `AStarGrid2D` from the tile map's used cells:
+
+```gdscript
+extends TileMapLayer
+
+const CELL_SIZE = Vector2i(64, 64)
+var _astar := AStarGrid2D.new()
+var _path := PackedVector2Array()
+
+func _ready() -> void:
+    _astar.region = Rect2i(0, 0, 18, 10)
+    _astar.cell_size = CELL_SIZE
+    _astar.offset = CELL_SIZE * 0.5
+    _astar.default_compute_heuristic = AStarGrid2D.HEURISTIC_MANHATTAN
+    _astar.default_estimate_heuristic = AStarGrid2D.HEURISTIC_MANHATTAN
+    _astar.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_NEVER
+    _astar.update()
+
+    for pos in get_used_cells():
+        _astar.set_point_solid(pos)
+
+func find_path(local_start: Vector2i, local_end: Vector2i) -> PackedVector2Array:
+    clear_path()
+    _start_point = local_to_map(local_start)
+    _end_point = local_to_map(local_end)
+    _path = _astar.get_point_path(_start_point, _end_point)
+    if not _path.is_empty():
+        set_cell(_start_point, 0, TILE_START_POINT)
+        set_cell(_end_point, 0, TILE_END_POINT)
+    queue_redraw()
+    return _path.duplicate()
+```
+
+The path is drawn in `_draw()` using `draw_line()` and `draw_circle()` — a good example of combining `CanvasItem` custom drawing with game logic.
+
+**When to use `AStarGrid2D` vs `NavigationAgent2D`:**
+- Use `AStarGrid2D` when your world is a uniform tile grid and you want direct control over which cells are passable.
+- Use `NavigationAgent2D` when your walkable area is defined by arbitrary polygons (e.g., hand-drawn regions or generated geometry).
+
+---
+
+## navigation_mesh_chunks — chunked navigation for large worlds
+
+`navigation_mesh_chunks` demonstrates how to bake navigation meshes in chunks rather than for the entire world at once. This approach keeps memory usage constant and allows streaming in new chunks as the player moves through a large world.
+
+**Godot 4.3 or later is required** for this demo.
+
+Left-clicking changes the pathfinding start position so you can visualize how paths cross chunk boundaries. The `navmesh_chunks_demo_2d.gd` script handles chunk creation, baking, and cleanup via `NavigationServer2D` API calls.
+
+<Tip>
+  Chunked navigation is the right approach when your world is too large to bake as a single navigation polygon without unacceptable memory overhead or bake times.
+</Tip>
+
+---
+
+## hexagonal_map — hex grid TileMap and CharacterBody2D
+
+`hexagonal_map` shows how to configure a `TileSet` and `TileMap` for hexagonal cells and how to adjust character movement math to match hex geometry. The troll character moves on the hex grid using `CharacterBody2D.move_and_slide()`, with the y-axis velocity scaled by `tan(30°)` to make diagonal movement visually correct on hex tiles:
+
+```gdscript
+extends CharacterBody2D
+
+const MOTION_SPEED = 30
+const FRICTION_FACTOR = 0.89
+const TAN30DEG = tan(deg_to_rad(30))
+
+func _physics_process(_delta: float) -> void:
+    var motion := Vector2()
+    motion.x = Input.get_axis(&"move_left", &"move_right")
+    motion.y = Input.get_axis(&"move_up", &"move_down")
+    # Scale y so diagonal movement fits hexagonal tile geometry.
+    motion.y *= TAN30DEG
+    velocity += motion.normalized() * MOTION_SPEED
+    velocity *= FRICTION_FACTOR  # Apply friction each frame.
+    move_and_slide()
+```
+
+The `FRICTION_FACTOR` multiplier applied every frame produces a gradual deceleration without a separate stop condition — a simple approach that feels responsive on hex grids.
+
+---
+
+## PhysicsBody2D types: a quick reference
+
+<Tabs>
+  <Tab title="CharacterBody2D">
+    You drive movement entirely in code. Call `move_and_slide()` each physics frame; Godot handles collision resolution and gives you `is_on_floor()`, `is_on_wall()`, etc.
+
+    **Best for:** Player characters, enemies with predictable movement, anything where you need tight designer control over feel.
+
+    **Demos:** `platformer`, `kinematic_character`, `navigation`, `hexagonal_map`
+  </Tab>
+  <Tab title="RigidBody2D">
+    The physics server controls movement. You apply forces or set velocity inside `_integrate_forces(state)`. The body interacts naturally with other physics objects.
+
+    **Best for:** Objects that need to tumble, stack, balance on seesaws, or react to explosions. Player characters only when full physics fidelity is essential.
+
+    **Demos:** `physics_platformer` (player and enemies), `pong` (ball), `platformer` (bullets)
+  </Tab>
+  <Tab title="StaticBody2D">
+    Never moves (or moves only when you set its position directly). Other bodies collide with it.
+
+    **Best for:** Level geometry, walls, floors, ceilings.
+
+    **Demos:** Ground and platform geometry in all platformer demos.
+  </Tab>
+</Tabs>

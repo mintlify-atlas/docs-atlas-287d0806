@@ -1,0 +1,85 @@
+---
+title: "3D Demos: Explore Godot's 3D Capabilities"
+description: "Browse 33 fully playable 3D demo projects covering characters, physics, rendering, navigation, and more — all written in GDScript."
+---
+
+The 3D demo collection contains 33 standalone projects that demonstrate how to build real features in Godot's 3D environment. Every demo is written in GDScript and covers a wide range of topics: from beginner-friendly character controllers and vehicle physics, to advanced rendering techniques like signed-distance-field global illumination, volumetric fog, and procedural sky shaders. Demos target different renderers — **Forward+**, **Mobile**, and **Compatibility** — so you can see how rendering capabilities scale across platforms.
+
+<CardGroup cols={2}>
+  <Card title="Characters and Physics" icon="person-running" href="/3d/characters-and-physics">
+    CharacterBody3D, RigidBody3D vehicles, ragdoll simulation, soft-body cloth, and physics interpolation.
+  </Card>
+  <Card title="Graphics and Rendering" icon="image" href="/3d/graphics-and-rendering">
+    Global illumination, volumetric fog, GPU particles, PBR materials, tonemapping, and custom sky shaders.
+  </Card>
+  <Card title="Navigation" icon="map" href="/3d/navigation">
+    NavigationAgent3D pathfinding, streaming navigation mesh chunks, waypoints, and inverse kinematics.
+  </Card>
+</CardGroup>
+
+## All 3D demos by category
+
+### Characters and physics
+
+| Demo | Description |
+|------|-------------|
+| `squash_the_creeps` | Beginner 3D game that accompanies the official Godot tutorial. Uses `CharacterBody3D` for the player and mobs. |
+| `kinematic_character` | First-person kinematic character with jump, gravity, and camera follow. |
+| `rigidbody_character` | Character controller built on `RigidBody3D` instead of `CharacterBody3D`. |
+| `truck_town` | Vehicle physics with `VehicleBody3D`, trailers connected by `ConeTwistJoint3D`, and tow chains using `PinJoint3D`. |
+| `ragdoll_physics` | Spawnable ragdolls with physical bones, slow-motion, and ray-cast placement. |
+| `soft_body_physics` | `SoftBody3D` cloth, soft spheres, pinned points, and per-point impulse forces. |
+| `physics_tests` | Automated and interactive collision and physics test suite. |
+| `physics_interpolation` | Smooth movement between physics ticks using physics interpolation. |
+| `platformer` | 3D platformer with camera follow and level geometry. |
+| `csg` | Constructive Solid Geometry for prototype level building. |
+
+### Graphics and rendering
+
+| Demo | Description |
+|------|-------------|
+| `global_illumination` | Interactive comparison of LightmapGI, VoxelGI, and SDFGI with SSAO and SSIL toggles. |
+| `volumetric_fog` | `VolumetricFog` node configured through `Environment` in a dark corridor scene. |
+| `particles` | `GPUParticles3D` with sub-emitters and `GPUParticlesCollisionSDF3D` for collision shapes. |
+| `lights_and_shadows` | Directional, omni, and spot lights with shadow maps and a day/night cycle. |
+| `material_testers` | PBR `StandardMaterial3D` parameter explorer — roughness, metallic, emission, and more. |
+| `procedural_materials` | Shader-driven procedural texturing without external image assets. |
+| `tonemap_color_correction` | `Environment` tonemapping modes and LUT-based color correction. |
+| `sky_shaders` | Custom `Sky` shader implementing volumetric clouds with Perlin-Worley noise. |
+| `antialiasing` | Side-by-side comparison of MSAA, FXAA, and TAA. |
+| `decals` | `Decal` node usage for surface decal projection. |
+| `occlusion_culling_mesh_lod` | Automatic LOD switching and `OccluderInstance3D` occlusion culling. |
+| `variable_rate_shading` | VRS to reduce shading work on less-important screen regions. |
+| `visibility_ranges` | `GeometryInstance3D` LOD visibility range configuration. |
+| `voxel` | Voxel-based world rendering approach. |
+| `physical_light_camera_units` | Physical light and camera units (EV100, lumens, Kelvin). |
+| `graphics_settings` | Runtime graphics quality settings with quality presets. |
+| `sprites` | Billboard sprites and `AnimatedSprite3D` in a 3D scene. |
+| `labels_and_texts` | `Label3D` and `TextMesh` for 3D text rendering. |
+
+### Navigation
+
+| Demo | Description |
+|------|-------------|
+| `navigation` | `NavigationAgent3D` pathfinding around a static scene with drawn path visualization. |
+| `navigation_mesh_chunks` | Streaming navigation mesh baked per chunk for large worlds. |
+| `waypoints` | Heads-up 2D waypoint markers that track 3D world positions. |
+| `ik` | Inverse kinematics using `SkeletonIK3D` and the FABRIK solver. |
+
+<Note>
+Not every demo runs on all three renderers. Demos that rely on SDFGI or VoxelGI require the **Forward+** renderer. The Compatibility renderer supports LightmapGI and `CharacterBody3D` physics but lacks screen-space effects (SSAO, SSIL) and some post-processing features. Check each demo's `README.md` or `project.godot` for the required renderer.
+</Note>
+
+## Renderer overview
+
+Godot 4 ships with three rendering backends. The 3D demos collectively cover all three.
+
+| Renderer | Typical use | Supported in demos |
+|----------|-------------|-------------------|
+| **Forward+** | Desktop, high-end consoles | Most 3D demos |
+| **Mobile** | Mobile, mid-range hardware | Select demos |
+| **Compatibility** | Web, low-end hardware, OpenGL | `navigation`, `squash_the_creeps` fallback paths |
+
+<Tip>
+Open any demo in the Godot editor, then go to **Project → Project Settings → Rendering → Renderer** to switch backends. Some demos detect the active renderer at runtime and adjust quality settings automatically — see `Main.gd` in `squash_the_creeps` for an example.
+</Tip>

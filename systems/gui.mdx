@@ -1,0 +1,154 @@
+---
+title: "GUI System: Control Nodes, Theming, and i18n in Godot"
+description: "Learn Godot's Control node system through fifteen demos covering theming, drag-and-drop, rich text, internationalization, accessibility, and more."
+---
+
+Godot's GUI system is built entirely on the `Control` node, which handles layout, focus, theming, and input routing in a unified tree. Whether you need a scrollable item list, a multi-language UI, or a custom paint application, the fifteen demos in this group demonstrate the full breadth of the system. Every demo targets the Compatibility renderer, and all except the MSDF font demo include GDScript.
+
+## Demo overview
+
+<CardGroup cols={2}>
+  <Card title="Accessibility" icon="universal-access">
+    Demonstrates accessible UI design patterns, including proper focus order and screen reader–friendly label associations.
+  </Card>
+  <Card title="BiDi and font features" icon="text">
+    Shows bidirectional text layout (Arabic, Hebrew) alongside advanced OpenType font features such as ligatures and stylistic sets.
+  </Card>
+  <Card title="Control gallery" icon="table-cells">
+    A live catalog of every built-in Control node—buttons, sliders, trees, tabs, color pickers, and more—rendered side by side.
+  </Card>
+  <Card title="Drag and drop" icon="hand-pointer">
+    Implements `_get_drag_data()`, `_can_drop_data()`, and `_drop_data()` to transfer colored swatches between `ColorPickerButton` nodes.
+  </Card>
+  <Card title="GD Paint" icon="paintbrush">
+    A simple pixel-art paint application built entirely from Control nodes, demonstrating custom mouse input handling on a Canvas.
+  </Card>
+  <Card title="Input mapping" icon="keyboard">
+    Lets players remap actions at runtime by listening for the next input event and writing it to the `InputMap` singleton.
+  </Card>
+  <Card title="MSDF font" icon="font">
+    Renders text with multi-channel signed-distance-field (MSDF) fonts that stay crisp at any size. This demo has no code—all configuration is done in resources.
+  </Card>
+  <Card title="Multiple resolutions" icon="monitor">
+    Shows how to configure the viewport stretch mode and aspect ratio so your UI adapts to different screen sizes without manual scaling.
+  </Card>
+  <Card title="Pseudolocalization" icon="globe">
+    Enables Godot's built-in pseudolocalization to catch layout issues—truncated strings, missing padding, and right-to-left flow—before real translations are ready.
+  </Card>
+  <Card title="Regex" icon="code">
+    Uses `RegEx` to validate and extract data from text field input, showing pattern matching and capture groups in GDScript.
+  </Card>
+  <Card title="Rich text BBCode" icon="file-text">
+    Exercises the `RichTextLabel` BBCode tags: color, bold, italic, image embedding, clickable URLs, animated effects, and custom tags.
+  </Card>
+  <Card title="Theming override" icon="palette">
+    Changes `StyleBoxFlat` border colors and `Label` font colors at runtime using `add_theme_stylebox_override()` and `add_theme_color_override()`.
+  </Card>
+  <Card title="Translation" icon="language">
+    Shows both CSV-based and PO-based localization workflows, including `TranslationServer` locale switching at runtime.
+  </Card>
+  <Card title="UI mirroring" icon="arrows-left-right">
+    Demonstrates automatic left-to-right to right-to-left layout mirroring for Arabic and Hebrew locales using `Control.layout_direction`.
+  </Card>
+</CardGroup>
+
+<Note>
+All GUI demos use the Compatibility renderer. The MSDF font demo is the only one with no GDScript—its configuration lives entirely in `.tres` resource files.
+</Note>
+
+## Theming at runtime
+
+The theming override demo shows how to modify individual style properties on a node without creating an entirely new Theme resource. You duplicate the existing style box, change the property, and apply the override:
+
+```gdscript
+extends Control
+
+@onready var button: Button  = $Panel/MarginContainer/VBoxContainer/Button
+@onready var label:  Label   = $Panel/MarginContainer/VBoxContainer/Label
+
+func _on_button_pressed() -> void:
+    # Duplicate the existing stylebox to avoid affecting other nodes.
+    var normal: StyleBoxFlat = button.get_theme_stylebox(&"normal").duplicate()
+    normal.border_color = Color(1, 1, 0)
+    var hover: StyleBoxFlat = button.get_theme_stylebox(&"hover").duplicate()
+    hover.border_color = Color(1, 1, 0)
+    var pressed: StyleBoxFlat = button.get_theme_stylebox(&"pressed").duplicate()
+    pressed.border_color = Color(1, 1, 0)
+
+    # Apply the overrides to this node only.
+    button.add_theme_stylebox_override(&"normal",  normal)
+    button.add_theme_stylebox_override(&"hover",   hover)
+    button.add_theme_stylebox_override(&"pressed", pressed)
+
+    label.add_theme_color_override(&"font_color", Color(1, 1, 0.375))
+
+func _on_reset_all_button_pressed() -> void:
+    button.remove_theme_stylebox_override(&"normal")
+    button.remove_theme_stylebox_override(&"hover")
+    button.remove_theme_stylebox_override(&"pressed")
+    label.remove_theme_color_override(&"font_color")
+```
+
+<Note>
+Use `add_theme_stylebox_override()` rather than setting `custom_styles/normal` via `set()`. Custom theme item properties are not treated as Object properties, so the property path approach does not work.
+</Note>
+
+## Drag and drop
+
+Godot's drag-and-drop system relies on three virtual methods that you override on Control nodes. The drag source provides data; the drop target validates and consumes it.
+
+```gdscript
+extends ColorPickerButton
+
+# Called when the user starts dragging this node.
+func _get_drag_data(_at_position: Vector2) -> Color:
+    # Build a preview widget centered on the cursor.
+    var cpb := ColorPickerButton.new()
+    cpb.color = color
+    cpb.size = Vector2(80.0, 50.0)
+
+    var preview := Control.new()
+    preview.add_child(cpb)
+    cpb.position = -0.5 * cpb.size
+    set_drag_preview(preview)
+
+    # The returned value is passed to _can_drop_data and _drop_data.
+    return color
+
+# Called each frame the dragged item hovers over a potential target.
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+    return typeof(data) == TYPE_COLOR
+
+# Called when the user releases the drag over an accepting target.
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+    color = data
+```
+
+## Internationalization demos
+
+Three demos address different aspects of localization:
+
+<AccordionGroup>
+  <Accordion title="Translation (CSV and PO)">
+    The translation demo ships two scenes: one using Godot's CSV translation format and one using GNU PO files. Both scenes call `TranslationServer.set_locale()` to switch languages at runtime. The CSV workflow is simpler for small projects; the PO workflow integrates with standard translation toolchains such as Poedit.
+  </Accordion>
+  <Accordion title="BiDi and font features">
+    Bidirectional text is handled automatically by Godot's text server when you set `Control.layout_direction` to `LAYOUT_DIRECTION_RTL` or leave it as `LAYOUT_DIRECTION_AUTO`. The BiDi demo also exercises OpenType features—ligatures, fractions, and tabular figures—by setting them in `FontVariation.opentype_features`.
+  </Accordion>
+  <Accordion title="Pseudolocalization">
+    Enable pseudolocalization in Project Settings under **Internationalization → Pseudolocalization**. It replaces Latin characters with visually similar accented ones and optionally adds padding to simulate text expansion. Running your UI with pseudolocalization active reveals truncated labels and layout assumptions before you hand files to translators.
+  </Accordion>
+</AccordionGroup>
+
+## UI mirroring
+
+When you set a Control node's `layout_direction` to `LAYOUT_DIRECTION_RTL`, Godot mirrors the entire sub-tree automatically: horizontal margins swap, HBoxContainers reverse order, and `RichTextLabel` aligns to the right. The UI mirroring demo sets this property at the root level and shows the visual result alongside the LTR layout.
+
+```gdscript
+# Switch the entire UI to right-to-left layout.
+func _on_rtl_toggled(pressed: bool) -> void:
+    $RootContainer.layout_direction = (
+        Control.LAYOUT_DIRECTION_RTL if pressed
+        else Control.LAYOUT_DIRECTION_LTR
+    )
+```

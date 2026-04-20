@@ -1,0 +1,219 @@
+---
+title: "Mobile demos: Touch input, sensors, and Android IAP"
+description: "Explore five Godot mobile demos covering Android in-app purchases, multi-touch gestures, touch-point visualisation, and accelerometer and gyroscope input."
+---
+
+Godot's mobile support goes beyond simply exporting to Android or iOS. The engine provides dedicated input APIs for multi-touch screens, raw hardware sensors such as the accelerometer and gyroscope, and platform plugins for store-specific features like in-app purchases. The five demos in the `mobile/` folder cover each of these areas with working GDScript code you can adapt directly into your project. Most demos run on desktop for testing, but the Android IAP demo requires a real Android device with a configured Google Play Billing plugin.
+
+<Warning>
+  The `android_iap` demo only runs on Android. Running it on desktop or in the Godot editor shows an alert and disables the purchase buttons because the `GodotGooglePlayBilling` singleton is not present outside of an Android export with the plugin installed.
+</Warning>
+
+## The five mobile demos
+
+<CardGroup cols={2}>
+  <Card title="android_iap" icon="cart-shopping" href="#android-iap">
+    In-app purchases on Android via the GodotGooglePlayBilling plugin. Covers connecting to the billing service, querying SKU details, initiating purchases, acknowledging, and consuming them.
+  </Card>
+  <Card title="multitouch_cubes" icon="hand-pointer" href="#multitouch-cubes">
+    Rotates and scales a 3D cube with one-finger drag and two-finger pinch-to-zoom gestures using `InputEventScreenTouch` and `InputEventScreenDrag`.
+  </Card>
+  <Card title="multitouch_view" icon="circle" href="#multitouch-view">
+    Visualises every active touch point as a colour-coded circle. Uses a `TouchHelper` autoload to track pointer state across touch and drag events.
+  </Card>
+  <Card title="sensors" icon="compass" href="#sensors">
+    Reads accelerometer, gravity, magnetometer, and gyroscope data each frame. Shows how to compute device orientation, a north-pointing vector, and drift-corrected gyroscope integration.
+  </Card>
+</CardGroup>
+
+<Note>
+  The `sensors` demo uses the **Mobile** renderer. All other mobile demos use the **Compatibility** renderer.
+</Note>
+
+## Android IAP
+
+The `android_iap` demo connects to Google Play Billing through the `GodotGooglePlayBilling` engine singleton, which is injected at runtime by the Android plugin. Because the singleton is absent on non-Android targets, the demo always guards with `Engine.has_singleton()`:
+
+```gdscript
+extends Control
+
+const TEST_ITEM_SKU = "my_in_app_purchase_sku"
+
+var payment: Object = null
+
+func _ready() -> void:
+    if Engine.has_singleton(&"GodotGooglePlayBilling"):
+        payment = Engine.get_singleton(&"GodotGooglePlayBilling")
+        payment.connected.connect(_on_connected)
+        payment.disconnected.connect(_on_disconnected)
+        payment.purchases_updated.connect(_on_purchases_updated)
+        payment.sku_details_query_completed.connect(_on_sku_details_query_completed)
+        payment.purchase_acknowledged.connect(_on_purchase_acknowledged)
+        payment.purchase_consumed.connect(_on_purchase_consumed)
+        payment.purchase_error.connect(_on_purchase_error)
+        payment.query_purchases_response.connect(_on_query_purchases_response)
+        payment.startConnection()
+    else:
+        show_alert("Android IAP support is not enabled.\n\nMake sure you have enabled "
+            + '"Custom Build" and installed and enabled the GodotGooglePlayBilling plugin '
+            + "in your Android export settings!")
+```
+
+When the connection succeeds, the demo immediately queries for any existing unacknowledged purchases. According to Google Play policy, every purchase must be acknowledged within three days or it is automatically refunded:
+
+```gdscript
+func _on_connected() -> void:
+    payment.queryPurchases("inapp")  # Use "subs" for subscriptions.
+
+func _on_query_purchases_response(query_result: Dictionary) -> void:
+    if query_result.status == OK:
+        for purchase: Dictionary in query_result.purchases:
+            if not purchase.is_acknowledged:
+                payment.acknowledgePurchase(purchase.purchase_token)
+```
+
+To initiate a purchase and then consume it (for consumable items like coins):
+
+```gdscript
+func _on_PurchaseButton_pressed() -> void:
+    var response: Dictionary = payment.purchase(TEST_ITEM_SKU)
+    if response.status != OK:
+        show_alert("Purchase error %s: %s" % [response.response_code, response.debug_message])
+
+func _on_purchase_consumed(purchase_token: String) -> void:
+    show_alert("Purchase consumed successfully: %s" % purchase_token)
+```
+
+<Tip>
+  To set up the demo on a real device, enable **Custom Build** in your Android export preset, install the GodotGooglePlayBilling plugin via the Android plugin system, configure a test SKU in the Google Play Console, and run the project on a device that is signed in to a Google account with tester access.
+</Tip>
+
+## Multitouch cubes
+
+The `multitouch_cubes` demo handles gestures by tracking active finger positions in a dictionary keyed by finger index. One finger rotates the cube around the X and Y axes; two fingers pinch to zoom and rotate around the Z axis.
+
+The core input handler lives in `gesture_area.gd` and processes `InputEventScreenTouch` and `InputEventScreenDrag` events:
+
+```gdscript
+extends Control
+
+var base_state := {}
+var curr_state := {}
+var base_xform: Transform3D
+
+func _gui_input(input_event: InputEvent) -> void:
+    var finger_count := base_state.size()
+
+    if finger_count == 0:
+        if input_event is InputEventScreenTouch and input_event.pressed:
+            base_state = { input_event.index: input_event.position }
+
+    elif finger_count == 1:
+        if input_event is InputEventScreenDrag and curr_state.has(input_event.index):
+            var unit_drag := _px2unit(base_state[base_state.keys()[0]] - input_event.position)
+            if one_finger_rot_x:
+                target_node.global_rotate(Vector3.UP, deg_to_rad(180.0 * unit_drag.x))
+            if one_finger_rot_y:
+                target_node.global_rotate(Vector3.RIGHT, deg_to_rad(180.0 * unit_drag.y))
+            curr_state[input_event.index] = input_event.position
+            base_state[input_event.index] = input_event.position
+            base_xform = target_node.get_transform()
+
+    elif finger_count == 2:
+        if input_event is InputEventScreenDrag and curr_state.has(input_event.index):
+            curr_state[input_event.index] = input_event.position
+            var base_segment: Vector3 = base_state[base_state.keys()[0]] - base_state[base_state.keys()[1]]
+            var new_segment: Vector3 = curr_state[curr_state.keys()[0]] - curr_state[curr_state.keys()[1]]
+            if two_fingers_zoom:
+                var base_scale := Vector3(base_xform.basis.x.x, base_xform.basis.y.y, base_xform.basis.z.z).length()
+                var new_scale := clampf(base_scale * (new_segment.length() / base_segment.length()), min_scale, max_scale) / base_scale
+                target_node.set_transform(base_xform.scaled(new_scale * Vector3.ONE))
+            if two_fingers_rot_z:
+                target_node.global_rotate(Vector3.BACK, new_segment.angle_to(base_segment))
+```
+
+The `_px2unit()` helper normalises pixel drag distances by the shortest viewport axis, so the same gesture produces consistent rotation angles regardless of screen resolution.
+
+## Multitouch view
+
+The `multitouch_view` demo draws a labelled circle for each active touch point. It uses a `TouchHelper` autoload that processes `InputEventScreenTouch` and `InputEventScreenDrag` events into a `state` dictionary mapping finger index to position. The main scene redraws every frame:
+
+```gdscript
+extends Node2D
+
+func _process(_delta: float) -> void:
+    queue_redraw()
+
+func _draw() -> void:
+    var touch_helper: Node = $"/root/TouchHelper"
+    for ptr_index: int in touch_helper.state.keys():
+        var pos: Vector2 = touch_helper.state[ptr_index]
+        var color := _get_color_for_ptr_index(ptr_index)
+        color.a = 0.75
+        draw_circle(pos, 40.0, color)
+
+func _get_color_for_ptr_index(index: int) -> Color:
+    var x := (index % 7) + 1
+    return Color(float(bool(x & 1)), float(bool(x & 2)), float(bool(x & 4)))
+```
+
+## Sensors
+
+The `sensors` demo reads four hardware inputs every frame using `Input` static methods and uses them to compute device orientation:
+
+```gdscript
+func _process(delta: float) -> void:
+    var acc  := Input.get_accelerometer()
+    var grav := Input.get_gravity()
+    var mag  := Input.get_magnetometer()
+    var gyro := Input.get_gyroscope()
+```
+
+The demo shows three sensor fusion techniques:
+
+**Magnetometer + gravity** — combines the gravity vector with the magnetometer reading to produce a north-aligned orientation matrix. This is robust but sensitive to nearby magnets:
+
+```gdscript
+func orientate_by_mag_and_grav(p_mag: Vector3, p_grav: Vector3) -> Basis:
+    var rotate := Basis()
+    p_mag = p_mag.normalized()
+    rotate.y = -p_grav.normalized()   # Gravity points down; -gravity points up.
+    rotate.x = rotate.y.cross(p_mag)
+    rotate.z = rotate.x.cross(rotate.y)
+    return rotate
+```
+
+**Gyroscope + drift correction** — integrates angular velocity from the gyroscope each frame for smooth, low-latency rotation, then applies a gravity-based drift correction to prevent the accumulated orientation from drifting away from true vertical over time:
+
+```gdscript
+func rotate_by_gyro(p_gyro: Vector3, p_basis: Basis, p_delta: float) -> Basis:
+    var rotate := Basis()
+    rotate = rotate.rotated(p_basis.x, -p_gyro.x * p_delta)
+    rotate = rotate.rotated(p_basis.y, -p_gyro.y * p_delta)
+    rotate = rotate.rotated(p_basis.z, -p_gyro.z * p_delta)
+    return rotate * p_basis
+
+func drift_correction(p_basis: Basis, p_grav: Vector3) -> Basis:
+    var real_up := -p_grav.normalized()
+    var dot := p_basis.y.dot(real_up)
+    if dot < 1.0:
+        var axis := p_basis.y.cross(real_up).normalized()
+        var correction := Basis(axis, acos(dot))
+        p_basis = correction * p_basis
+    return p_basis
+```
+
+<Note>
+  The gyroscope outputs **rotational velocity** in radians per second, not a direction vector. Always multiply by `delta` before applying it. Budget phones often lack a gyroscope entirely; the magnetometer-plus-gravity path is the reliable fallback.
+</Note>
+
+**North vector** — computes the direction pointing to magnetic north on the horizon plane by crossing the gravity vector with the magnetometer reading:
+
+```gdscript
+func calc_north(p_grav: Vector3, p_mag: Vector3) -> Vector3:
+    p_grav = p_grav.normalized()
+    var east := p_grav.cross(p_mag.normalized()).normalized()
+    return east.cross(p_grav).normalized()
+```
+
+This value is useful for compass-style mechanics and AR applications that need world-space alignment.

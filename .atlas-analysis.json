@@ -1,0 +1,108 @@
+{
+  "projectType": "general",
+  "projectName": "Godot Demo Projects",
+  "projectDescription": "A collection of official demonstration and template projects for the Godot Engine, covering 2D, 3D, audio, networking, GUI, XR, and more.",
+  "theme": "palm",
+  "primaryColor": "#448cbc",
+  "lightColor": "#b9d4e7",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "godot-versions"
+            ]
+          },
+          {
+            "group": "2D Demos",
+            "pages": [
+              "2d/overview",
+              "2d/platformer",
+              "2d/physics",
+              "2d/shaders-and-effects"
+            ]
+          },
+          {
+            "group": "3D Demos",
+            "pages": [
+              "3d/overview",
+              "3d/characters-and-physics",
+              "3d/graphics-and-rendering",
+              "3d/navigation"
+            ]
+          },
+          {
+            "group": "Systems & Features",
+            "pages": [
+              "systems/audio",
+              "systems/gui",
+              "systems/networking",
+              "systems/loading-and-scenes",
+              "systems/viewport"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/xr-and-vr",
+              "advanced/compute-shaders",
+              "advanced/plugins",
+              "advanced/mobile",
+              "advanced/csharp-mono"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Over 100 demo projects covering all major Godot Engine features",
+    "2D game examples: platformers, physics, shaders, tilemaps, navigation",
+    "3D game examples: rendering pipelines, global illumination, particles, physics",
+    "Audio demos: effects, BPM sync, MIDI, microphone recording, text-to-speech",
+    "GUI demos: accessibility, drag-and-drop, theming, internationalization",
+    "Networking demos: WebSocket, WebRTC, multiplayer (ENet)",
+    "XR/VR demos: OpenXR, hand tracking, composition layers, WebXR",
+    "Compute shader and GPU compute examples",
+    "Editor plugin development examples",
+    "C# (Mono) versions of key demos",
+    "Mobile-specific demos: touch, sensors, in-app purchases",
+    "Scene management: threading, serialization, autoloads, runtime save/load"
+  ],
+  "publicApiSurface": [
+    "2d/platformer — 2D pixel-art platformer with physics, tilemaps, split-screen",
+    "2d/dodge_the_creeps — beginner 2D game from official tutorial",
+    "2d/finite_state_machine — FSM pattern for character logic",
+    "2d/navigation — A* and NavigationAgent2D pathfinding",
+    "2d/physics_platformer — CharacterBody2D physics-based character",
+    "2d/pong — Classic pong with RigidBody2D",
+    "2d/particles — CPUParticles2D and GPUParticles2D",
+    "3d/squash_the_creeps — 3D beginner game from official tutorial",
+    "3d/truck_town — RigidBody3D vehicle physics",
+    "3d/global_illumination — SDFGI and VoxelGI techniques",
+    "3d/ragdoll_physics — Skeletal physics simulation",
+    "3d/navigation — NavigationAgent3D 3D pathfinding",
+    "3d/particles — GPUParticles3D effects",
+    "3d/soft_body_physics — SoftBody3D cloth and soft objects",
+    "3d/volumetric_fog — VolumetricFog environment effect",
+    "audio/rhythm_game — Beat-synchronized gameplay",
+    "audio/midi_piano — MIDI input handling",
+    "networking/multiplayer_bomber — ENet-based multiplayer game",
+    "networking/websocket_chat — WebSocket client/server chat",
+    "networking/webrtc_signaling — WebRTC peer-to-peer signaling",
+    "gui/control_gallery — Showcase of all Control node types",
+    "gui/theming_override — Theme and StyleBox customization",
+    "viewport/gui_in_3d — Rendering 2D GUI inside a 3D world",
+    "xr/openxr_hand_tracking_demo — OpenXR hand tracking",
+    "xr/openxr_composition_layers — XR composition layer types",
+    "plugins/addons — Custom node, main screen, material creator, import plugins",
+    "compute/heightmap — GPU compute heightmap generation",
+    "mono/dodge_the_creeps — C# version of beginner tutorial game"
+  ]
+}
